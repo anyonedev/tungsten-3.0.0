@@ -1,0 +1,58 @@
+#!/bin/bash
+# (C) Copyright 2012,2013 Continuent, Inc - Released under the New BSD License
+# Version 1.0.14 - 2014-07-21
+
+cookbook_dir=$(dirname $0)
+cd "$cookbook_dir/../"
+
+if [ ! -f $cookbook_dir/BOOTSTRAP.sh ]
+then
+    echo "$cookbook_dir/BOOTSTRAP.sh not found"
+    exit 1
+fi
+. $cookbook_dir/BOOTSTRAP.sh NODES_STAR.sh
+. $cookbook_dir/utilities.sh 
+
+check_installed
+check_if_nodes_are_reachable
+
+if [ -z "$HUB" ]
+then
+    echo "HUB undefined. Please update $cookbook_dir/NODES_STAR.sh"
+    exit 1
+fi
+
+#$cookbook_dir/clear_cluster
+
+echo "installing STAR" >$INSTALL_LOG
+date >> $INSTALL_LOG
+
+check_security
+INSTALL_COMMAND="./tools/tpm install star \
+    --reset \
+    --log=timestamp \
+    --replication-port=$DATABASE_PORT \
+    --replication-user=$DATABASE_USER \
+    --replication-password=$DATABASE_PASSWORD \
+    --datasource-log-directory=$BINLOG_DIRECTORY \
+    --home-directory=$TUNGSTEN_BASE \
+    --datasource-mysql-conf=$MY_CNF \
+    --datasource-log-directory=$BINLOG_DIRECTORY \
+    -a --datasource-boot-script=$MYSQL_BOOT_SCRIPT \
+    --repl-disable-relay-logs=true \
+    --rmi-port=$RMI_PORT \
+    --thl-port=$THL_PORT \
+    --masters=$MASTERS_LIST \
+    --hub=$HUB \
+    --hub-service=$HUB_SERVICE \
+    --master-services=$MASTER_SERVICES_LIST \
+    --topology=star \
+    $MORE_OPTIONS $MORE_TPM_OPTIONS $SECURITY_OPTIONS --$START_OPTION"
+
+run_command $INSTALL_COMMAND 
+
+# set +x
+
+echo "star" > $CURRENT_TOPOLOGY
+$cookbook_dir/show_cluster 
+post_installation

@@ -1,0 +1,487 @@
+#!/bin/bash
+# (C) Copyright 2012,2013 Continuent, Inc - Released under the New BSD License
+# Version 1.0.11 - 2013-12-30
+
+cookbook_dir=$(dirname $0)
+
+if [ ! -f $cookbook_dir/../CURRENT_TOPOLOGY ]
+then
+    echo "This command requires an installed cluster"
+    exit 1
+fi
+
+TOPOLOGY=$(echo $(cat CURRENT_TOPOLOGY) | tr '[a-z]' '[A-Z]')
+
+NODES=NODES_$TOPOLOGY.sh
+
+if [ ! -f $cookbook_dir/BOOTSTRAP.sh ]
+then
+    echo "$cookbook_dir/BOOTSTRAP.sh not found"
+    exit 1
+fi
+
+if [ ! -f $cookbook_dir/utilities.sh ]
+then
+    echo "$cookbook_dir/utilities.sh not found"
+    exit 1
+fi
+
+. $cookbook_dir/BOOTSTRAP.sh $NODES
+. $cookbook_dir/utilities.sh
+
+HOW_MANY_NODES=${#ALL_NODES[*]}
+HOW_MANY_MASTERS=${#MASTERS[*]}
+HOW_MANY_SLAVES=${#SLAVES[*]}
+
+case $TOPOLOGY in
+    MASTER_SLAVE)
+        EXPECTED_SERVICES_MASTER=1    
+        EXPECTED_SERVICES_SLAVE=1    
+    ;;
+    FAN_IN)
+        EXPECTED_SERVICES_MASTER=1    
+        EXPECTED_SERVICES_SLAVE=$(($HOW_MANY_MASTERS-1))
+    ;;
+    
+    STAR)
+        EXPECTED_SERVICES_MASTER=1    
+        EXPECTED_SERVICES_SLAVE=1
+        EXPECTED_SERVICES_HUB=$(($HOW_MANY_MASTERS-1))
+    ;;
+    ALL_MASTERS)
+        EXPECTED_SERVICES_MASTER=1
+        EXPECTED_SERVICES_SLAVE=$(($HOW_MANY_MASTERS-1))
+    ;;
+esac
+
+fill_roles
+
+## MYSQL is defined in BOOTSTRAP.sh
+# 
+if [ ! -f $MY_COOKBOOK_CNF ]
+then
+    write_my_cookbook_cnf
+fi
+
+echo "# $LONG_LINE"
+echo "# Testing cluster with installed topology '$TOPOLOGY'"
+echo "# $LONG_LINE"
+
+TESTS=0
+PASSED=0
+FAILED=0
+
+function check_security_status
+{
+    for NODE in ${ALL_NODES[*]}
+    do
+        IS_SECURE=$( $TREPCTL -host $NODE services -full | grep -w masterConnectUri | grep 'thls://')
+        if [ -n "$IS_SECURE" ]
+        then
+            SECURITY_FLAG="SECURED USING SSL"
+        else
+            SECURITY_FLAG="UNENCRYPTED"
+        fi
+        echo "# security status for node $NODE: $SECURITY_FLAG"
+    done
+}
+
+function check_executables
+{
+    msg=$1
+    REPLICATOR="$TUNGSTEN_BASE/tungsten/tungsten-replicator/bin/replicator"
+    TREPCTL_EXEC="$TUNGSTEN_BASE/tungsten/tungsten-replicator/bin/trepctl"
+    DDLSCAN="$TUNGSTEN_BASE/tungsten/tungsten-replicator/bin/ddlscan"
+    DATASCAN="$TUNGSTEN_BASE/tungsten/tungsten-replicator/bin/datascan"
+    TPASSWD="$TUNGSTEN_BASE/tungsten/cluster-home/bin/tpasswd"
+    TPM="$TUNGSTEN_BASE/tungsten/tools/tpm"
+    T_READ_MASTER_LOGS="$TUNGSTEN_BASE/tungsten/tungsten-replicator/scripts/tungsten_read_master_events"
+    T_PROVISION_SLAVE="$TUNGSTEN_BASE/tungsten/tungsten-replicator/scripts/tungsten_provision_slave"
+    T_SET_POSITION="$TUNGSTEN_BASE/tungsten/tungsten-replicator/scripts/tungsten_set_position"
+    APP_NAMES=(replicator trepctl thl ddlscan datascan tpasswd tpm tungsten_read_master_events tungsten_provision_slave tungsten_set_position)
+    APP_PATHS=($REPLICATOR $TREPCTL_EXEC $THL $DDLSCAN $DATASCAN $TPASSWD $TPM $T_READ_MASTER_LOGS $T_PROVISION_SLAVE $T_SET_POSITION)
+    APP_ARGS=(help help help -help -help -h --help --help --help --help)
+    echo "# Testing for executables - $msg"
+    for NODE in ${ALL_NODES[*]}
+    do
+        COUNT=0
+        for APP in ${APP_PATHS[*]}
+        do
+            APP_EXISTS=$($SSH $NODE "if [ -x $APP ] ; then echo OK ;fi" )
+            ok_equal "$APP_EXISTS" OK "$NODE: ${APP_NAMES[$COUNT]} executable exists"
+            if [ "$FAILED" != "0" ]
+            then
+                echo "not all executables found - bailing out"
+                exit 1
+            fi
+            APP_RUNS=$($SSH $NODE $APP ${APP_ARGS[$COUNT]} |grep ${APP_NAMES[$COUNT]} )
+            [ -n "$APP_RUNS" ] && APP_RUNS=RUNS
+            ok_equal "$APP_RUNS" RUNS "$NODE: ${APP_NAMES[$COUNT]} can run"
+            if [ "$FAILED" != "0" ]
+            then
+                echo "not all executables can run - bailing out"
+                exit 1
+            fi
+
+            APP_RUNS_WELL=$($SSH $NODE $APP ${APP_ARGS[$COUNT]} |grep "Exception" | head -n 1 2>&1 )
+            [ -z "$APP_WELL" ] && APP_RUNS_WELL=RUNS
+            ok_equal "$APP_RUNS_WELL" RUNS "$NODE: ${APP_NAMES[$COUNT]} can run without throwing an exception"
+            if [ "$FAILED" != "0" ]
+            then
+                echo "not all executables can run without throwing exceptions - bailing out"
+                exit 1
+            fi
+            COUNT=$(($COUNT+1))
+        done
+    done
+}
+
+function check_if_replicators_are_running
+{
+    msg=$1
+    echo "# Testing for running replicators - $msg"
+    EXPECTED_PROPERTIES_STATUS=40
+    EXPECTED_PROPERTIES_SERVICE=7
+    EXPECTED_PROPERTIES_SERVICE_FULL=41
+
+    all_running=yes
+    for RNODE in ${ALL_NODES[*]}
+    do
+        NUMSERVICES=$($TREPCTL -host $RNODE services | grep -w serviceName | awk '{print $3}'|wc -l)
+        EXPECTED_PROPERTIES_SERVICES=$(($EXPECTED_PROPERTIES_SERVICE*$NUMSERVICES))
+        EXPECTED_PROPERTIES_SERVICES_FULL=$(($EXPECTED_PROPERTIES_SERVICE_FULL*$NUMSERVICES))
+        RTMPSERVICES=services$$.txt
+        RTMPSERVICES_FULL=servicesfull$$.txt
+
+        $TREPCTL -host $RNODE services > $RTMPSERVICES
+        $TREPCTL -host $RNODE services -full > $RTMPSERVICES_FULL
+        HOW_MANY_PROPERTIES_SERVICES=$(grep -v '^\(Processing\|NAME\|Finished\|----\)' $RTMPSERVICES |awk '{print $1}' | wc -l)
+
+        ok_equal $HOW_MANY_PROPERTIES_SERVICES $EXPECTED_PROPERTIES_SERVICES \
+            "Services of node $RNODE produces $EXPECTED_PROPERTIES_SERVICES properties ($EXPECTED_PROPERTIES_SERVICE x $NUMSERVICES services)"
+        HOW_MANY_PROPERTIES_SERVICES_FULL=$(grep -v '^\(Processing\|NAME\|Finished\|----\)' $RTMPSERVICES_FULL |awk '{print $1}' | wc -l)
+        ok_equal $HOW_MANY_PROPERTIES_SERVICES_FULL $EXPECTED_PROPERTIES_SERVICES_FULL \
+            "[Full] services of node $RNODE produces $EXPECTED_PROPERTIES_SERVICES_FULL properties ($EXPECTED_PROPERTIES_SERVICE_FULL x $NUMSERVICES services)"
+
+        rm -f $RTMPSERVICES
+        rm -f $RTMPSERVICES_FULL
+        for RSERVICE in $($TREPCTL -host $RNODE services | grep -w serviceName | awk '{print $3}')
+        do
+            RTMPSTATUS=status$$.txt
+            $TREPCTL -host $RNODE -service $RSERVICE status > $RTMPSTATUS
+
+            HOW_MANY_PROPERTIES_STATUS=$(grep -v '^\(Processing\|NAME\|Finished\|----\)' $RTMPSTATUS |awk '{print $1}' | wc -l)
+            ok_equal $HOW_MANY_PROPERTIES_STATUS $EXPECTED_PROPERTIES_STATUS "Status of node $RNODE service $RSERVICE produces $EXPECTED_PROPERTIES_STATUS properties"
+            RSTATE=$(grep -w state $RTMPSTATUS | awk '{print $3}')
+            SEQNO=$( grep appliedLastSeqno $RTMPSTATUS | awk '{print $3}')
+            RROLE=$( grep -w role $RTMPSTATUS | awk '{print $3}')
+            RSERVICENAME=$( grep -w serviceName $RTMPSTATUS | awk '{print $3}')
+            ok_equal $RSTATE ONLINE "Node $RNODE - Service $RSERVICE is running ($RSERVICENAME [$RROLE]: $RSTATE - $SEQNO)"
+            if [ "$RSTATE" != "ONLINE" ]
+            then
+                all_running=no
+                cat $RTMPSTATUS
+            fi
+            rm -f $RTMPSTATUS
+        done
+    done
+    if [ "$all_running" != "yes" ]
+    then
+        echo "# Replicators are not all ONLINE - Bailing out"
+        exit 1
+    fi
+}
+
+check_security_status
+check_executables "Before all tests"
+check_if_replicators_are_running 'Before tests'
+
+DATA_POSTFIX=''
+DDL_POSTFIX=''
+MYSQL_VERSION=$($MYSQL -h ${MASTERS[0]} -BN -e 'select @@version'| perl -lne 'print $1 if /(\d+\.\d+)/')
+if [ -z "$MYSQL_VERSION" ]
+then
+    echo "error detecting MySQL version"
+    exit 1
+fi
+
+FRACTIONAL_TIME=OFF
+if [ "$MYSQL_VERSION" == "5.6" -o "$MYSQL_VERSION" == "5.7" -o "$MYSQL_VERSION" == "10.0" ]
+then
+    FRACTIONAL_TIME=ON
+fi
+
+ITERATIONS=1
+DATA_POSTFIXES=('')
+DATA_MIN_POSTFIXES=('')
+DATA_MAX_POSTFIXES=('')
+DDL_POSTFIXES=('')
+
+if [ "$FRACTIONAL_TIME" == "ON" ]
+then
+    DATA_POSTFIXES=(    '.1' '.01'  '.012' '.0123' '.01234' '.012345')
+    DATA_MIN_POSTFIXES=('.1' '.01'  '.001' '.0001' '.00001' '.000001')
+    DATA_MAX_POSTFIXES=('.9' '.99'  '.999' '.9999' '.99999' '.999999')
+    DDL_POSTFIXES=(     '(1)' '(2)' '(3)'  '(4)'   '(5)'    '(6)' )
+    ITERATIONS=6
+fi
+
+function check_for_table
+{
+    table_schema=$1
+    table_name=$2
+    expected_count=$3
+    from_which_master=$4
+    count_mode='table'
+    [ -n "$5" ] && count_mode=$5
+    
+    wanted_matches=${#SLAVES[*]}
+    found_matches=0
+    expected_text="exists"
+    if [ "$count_mode" == "records" ]
+    then
+        expected_text="has records"
+    fi
+    TIMEOUT=60
+    ELAPSED=0
+    if [ "$expected_count" == "0" ]
+    then
+        expected_text="doesn't exist"
+        if [ "$count_mode" == "records" ]
+        then
+            expected_text="has no records"
+        fi
+    fi
+    while [ "$found_matches" != "$wanted_matches" ]
+    do
+        found_matches=0
+        sleep 1
+        for TSLAVE in ${SLAVES[*]}
+        do
+            if [ "$TSLAVE" == "$from_which_master" ]
+            then
+                found_matches=$(($found_matches+1))
+                continue
+            fi
+            if [ "$count_mode" == "table" ]
+            then
+                FOUND_COUNT=$($MYSQL -BN -h $TSLAVE -e "select count(*) from information_schema.tables where table_schema='$table_schema' and  table_name = '$table_name'")
+            else
+                FOUND_COUNT=$($MYSQL -BN -h $TSLAVE -e "select count(*) from $table_schema.$table_name")
+            fi
+            if [ "$FOUND_COUNT" == "$expected_count" ]
+            then
+                found_matches=$(($found_matches+1))
+            fi
+            if [ -n "$VERBOSE" ]
+            then
+                echo "# Checking that table $table_schema.$table_name $expected_text on slave $TSLAVE (matches: $found_matches of $wanted_matches) "
+            fi
+        done
+        ELAPSED=$(($ELAPSED+1))
+        if [ "$ELAPSED" == "$TIMEOUT" ]
+        then
+            echo "not ok - Timeout exceeded while searching that table $table_schema.$table_name $expected_text "
+            check_if_replicators_are_running "after failed timeout"
+            exit 1
+        fi
+    done
+}
+
+function check_for_records
+{
+    check_for_table $1 $2 $3 $4 'records'
+}
+
+COUNTER=0
+for ITER in $(seq 1 $ITERATIONS)
+do
+    DATA_POSTFIX=${DATA_POSTFIXES[$COUNTER]}
+    DATA_MIN_POSTFIX=${DATA_MIN_POSTFIXES[$COUNTER]}
+    DATA_MAX_POSTFIX=${DATA_MAX_POSTFIXES[$COUNTER]}
+    DDL_POSTFIX=${DDL_POSTFIXES[$COUNTER]}
+    # echo "# data: <$DATA_POSTFIX> ddl: <$DDL_POSTFIX> counter: <$COUNTER> iter: <$ITER>"
+    COUNTER=$(($COUNTER+1))
+
+    SAMPLE_BLOB="%!+?/.,[]{}()*^&#@-_=abcdefghi0123456789"
+    SAMPLE_T=xyz
+    # SAMPLE_F=1.512345678901234
+    SAMPLE_F=1.012345678901234
+    SAMPLE_TINYINT=127
+    SAMPLE_U_TINYINT=255
+    SAMPLE_SMALLINT=32767
+    SAMPLE_U_SMALLINT=65535
+    SAMPLE_MEDIUMINT=8388607
+    SAMPLE_U_MEDIUMINT=16777215
+    SAMPLE_INT=2147483647
+    SAMPLE_U_INT=4294967295
+    SAMPLE_BIGINT=9223372036854775807
+    SAMPLE_U_BIGINT=18446744073709551615
+    SAMPLE_D=1969-09-01
+    MIN_D=1000-01-01
+    MAX_D=9999-12-31
+    SAMPLE_TIME=12:13:56$DATA_POSTFIX
+    MIN_TIME=00:00:00$DATA_MIN_POSTFIX
+    MAX_TIME=23:59:59$DATA_MAX_POSTFIX
+    SAMPLE_DT="2003-04-26 09:15:57$DATA_POSTFIX"
+    MIN_DT="1000-01-01 00:00:00$DATA_MIN_POSTFIX"
+    MAX_DT="9999-12-31 23:59:59$DATA_MAX_POSTFIX"
+
+    SAMPLE_TS="2003-04-26 09:15:58$DATA_POSTFIX"
+    MIN_TS="1970-01-01 00:00:01$DATA_MIN_POSTFIX"
+    MAX_TS="2038-01-19 03:14:07$DATA_MAX_POSTFIX"
+    SAMPLE_ENUM="two"
+    SAMPLE_SET="red,blue"
+
+    COUNT=0
+    for NODE in ${MASTERS[*]} 
+    do 
+        COUNT=$(($COUNT+1))
+        if [ -n "$BINLOG_FORMAT" ]
+        then
+            if [ "$MYSQL_VERSION" != "5.0" ]
+            then
+                echo "# Setting binlog format to '$BINLOG_FORMAT'"
+                $MYSQL -h $NODE -e "set global binlog_format=$BINLOG_FORMAT"
+            fi
+        fi
+        CURRENT_FORMAT=$($MYSQL -BN -h $NODE -e "show variables like 'binlog_format' " | awk '{print $2}' )
+        [ -z "$CURRENT_FORMAT" ] && CURRENT_FORMAT=statement
+        echo "# binlog format: $CURRENT_FORMAT"
+        $MYSQL -h $NODE -e "drop table if exists test.t$COUNT"
+        $MYSQL -h $NODE -e "drop table if exists test.tu$COUNT"
+        $MYSQL -h $NODE -e "drop table if exists test.boundaries$COUNT"
+        check_for_table "test" "t$COUNT" 0 $NODE
+        check_for_table "test" "boundaries$COUNT" 0 $NODE
+        $MYSQL -h $NODE -e "drop table if exists test.v$COUNT"
+        
+        $MYSQL -h $NODE -e "create table test.t$COUNT(id int not null primary key, c char(20), b blob, t text, ti time$DDL_POSTFIX, d date, dt datetime$DDL_POSTFIX, ts timestamp$DDL_POSTFIX, f double(20,15), e enum ('one', 'two', 'three'), s set ('yellow','red', 'white','blue')) engine=innodb"
+        $MYSQL -h $NODE -e "create table test.tu$COUNT(id int not null primary key, c char(20), t tinyint, ut tinyint unsigned, s smallint, us smallint unsigned, m mediumint, um mediumint unsigned, i int, ui int unsigned, b bigint, ub bigint unsigned ) engine=innodb"
+        $MYSQL -h $NODE -e "create or replace view test.v$COUNT as select * from test.t$COUNT"
+        $MYSQL -h $NODE -e "create table test.boundaries$COUNT(id int not null primary key, c char(20), ti time$DDL_POSTFIX, d date, dt datetime$DDL_POSTFIX, ts timestamp$DDL_POSTFIX) engine=innodb"
+
+        check_for_table "test" "t$COUNT" 1 $NODE
+        check_for_table "test" "boundaries$COUNT" 1 $NODE
+        $MYSQL -h $NODE -e "set sql_mode=''; insert into test.boundaries$COUNT values (1, 'inserted by node #$COUNT', null, null, null, null)"
+        $MYSQL -h $NODE -e "set sql_mode=''; insert into test.boundaries$COUNT values (2, 'inserted by node #$COUNT', '0', '0', '0', '0')"
+        $MYSQL -h $NODE -e "set sql_mode=''; insert into test.boundaries$COUNT values (3, 'inserted by node #$COUNT', '$MIN_TIME', '$MIN_D', '$MIN_DT', '$MIN_TS')"
+        $MYSQL -h $NODE -e "set sql_mode=''; insert into test.boundaries$COUNT values (4, 'inserted by node #$COUNT', '$MAX_TIME', '$MAX_D', '$MAX_DT', '$MAX_TS')"
+        $MYSQL -h $NODE -e "insert into test.v$COUNT values (1, 'inserted by node #$COUNT', '$SAMPLE_BLOB', '$SAMPLE_T', '$SAMPLE_TIME', '$SAMPLE_D', '$SAMPLE_DT', '$SAMPLE_TS', $SAMPLE_F,'$SAMPLE_ENUM', '$SAMPLE_SET')"
+        $MYSQL -h $NODE -e "insert into test.tu$COUNT values (1, 'inserted by node #$COUNT', $SAMPLE_TINYINT, $SAMPLE_U_TINYINT, $SAMPLE_SMALLINT, $SAMPLE_U_SMALLINT, $SAMPLE_MEDIUMINT, $SAMPLE_U_MEDIUMINT, $SAMPLE_INT,$SAMPLE_U_INT, $SAMPLE_BIGINT, $SAMPLE_U_BIGINT)"
+        check_for_records "test" "t$COUNT" 1 $NODE
+        check_for_records "test" "tu$COUNT" 1 $NODE
+        check_for_records "test" "boundaries$COUNT" 4 $NODE
+        # check_if_replicators_are_running 'after inserting'
+
+        # echo "############"
+        # $MYSQL -h $NODE -e "select * from test.v$COUNT"
+        # echo "############"
+
+        HOW_MANY_SERVICES=$($TREPCTL -host $NODE services | grep role | grep master| wc -l)
+        # echo "#M> $HOW_MANY_SERVICES"
+        ok_greater $HOW_MANY_SERVICES $EXPECTED_SERVICES_MASTER "Master $NODE has at least $EXPECTED_SERVICES_MASTER master services"
+        
+        if [ -n "$HUB" ]
+        then
+            if [ -n "$EXPECTED_SERVICES_HUB" ]
+            then
+                if [ "$NODE" == "$HUB" ]
+                then
+                    HOW_MANY_SERVICES=$($TREPCTL -host $NODE services | grep role |grep slave | wc -l)
+                    # echo "#H> $HOW_MANY_SERVICES"
+                    ok_greater $HOW_MANY_SERVICES $EXPECTED_SERVICES_HUB "HUB $NODE has at least $EXPECTED_SERVICES_HUB slave services"
+                fi
+            fi
+        fi
+    done
+
+    check_if_replicators_are_running 'after inserting'
+    # set -x
+    for SLAVE in ${SLAVES[*]} 
+    do
+        echo "# slave: $SLAVE"
+        COUNT=0
+        for NODE in ${MASTERS[*]} 
+        do 
+            COUNT=$(($COUNT+1))
+            TABLE_COUNT=$($MYSQL -BN -h $SLAVE -e "select count(*) from information_schema.tables where table_schema='test' and  table_name = 't$COUNT'")
+            VIEW_COUNT=$($MYSQL -BN -h $SLAVE -e "select count(*) from information_schema.tables where table_schema='test' and  table_name = 'v$COUNT'")
+            RECORD_COUNT=$($MYSQL -BN -h $SLAVE -e "select count(*) from test.t$COUNT where c = 'inserted by node #$COUNT' ")
+            BLOB_CONTENT=$($MYSQL -BN -h $SLAVE -e "select b from test.t$COUNT where c = 'inserted by node #$COUNT' ")
+            TEXT_CONTENT=$($MYSQL -BN -h $SLAVE -e "select t from test.t$COUNT where c = 'inserted by node #$COUNT' ")
+            DATE_CONTENT=$($MYSQL -BN -h $SLAVE -e "select d from test.t$COUNT where c = 'inserted by node #$COUNT' ")
+            TIME_CONTENT=$($MYSQL -BN -h $SLAVE -e "select ti from test.t$COUNT where c = 'inserted by node #$COUNT' ")
+            DT_CONTENT=$($MYSQL -BN -h $SLAVE -e "select dt from test.t$COUNT where c = 'inserted by node #$COUNT' ")
+            TS_CONTENT=$($MYSQL -BN -h $SLAVE -e "select ts from test.t$COUNT where c = 'inserted by node #$COUNT' ")
+            F_CONTENT=$($MYSQL -BN -h $SLAVE -e "select f from test.t$COUNT where c = 'inserted by node #$COUNT' ")
+            SET_CONTENT=$($MYSQL -BN -h $SLAVE -e "select s from test.t$COUNT where c = 'inserted by node #$COUNT' ")
+            ENUM_CONTENT=$($MYSQL -BN -h $SLAVE -e "select e from test.t$COUNT where c = 'inserted by node #$COUNT' ")
+            TINYINT_CONTENT=$($MYSQL -BN -h $SLAVE -e "select t from test.tu$COUNT where c = 'inserted by node #$COUNT' ")
+            TINYINT_U_CONTENT=$($MYSQL -BN -h $SLAVE -e "select ut from test.tu$COUNT where c = 'inserted by node #$COUNT' ")
+            SMALLINT_CONTENT=$($MYSQL -BN -h $SLAVE -e "select s from test.tu$COUNT where c = 'inserted by node #$COUNT' ")
+            SMALLINT_U_CONTENT=$($MYSQL -BN -h $SLAVE -e "select us from test.tu$COUNT where c = 'inserted by node #$COUNT' ")
+            MEDIUMINT_CONTENT=$($MYSQL -BN -h $SLAVE -e "select m from test.tu$COUNT where c = 'inserted by node #$COUNT' ")
+            MEDIUMINT_U_CONTENT=$($MYSQL -BN -h $SLAVE -e "select um from test.tu$COUNT where c = 'inserted by node #$COUNT' ")
+            INT_CONTENT=$($MYSQL -BN -h $SLAVE -e "select i from test.tu$COUNT where c = 'inserted by node #$COUNT' ")
+            INT_U_CONTENT=$($MYSQL -BN -h $SLAVE -e "select ui from test.tu$COUNT where c = 'inserted by node #$COUNT' ")
+            BIGINT_CONTENT=$($MYSQL -BN -h $SLAVE -e "select b from test.tu$COUNT where c = 'inserted by node #$COUNT' ")
+            BIGINT_U_CONTENT=$($MYSQL -BN -h $SLAVE -e "select ub from test.tu$COUNT where c = 'inserted by node #$COUNT' ")
+            ok_equal $TABLE_COUNT 1 "Tables from master #$COUNT"
+            ok_equal $VIEW_COUNT 1 "Views from master #$COUNT"
+            ok_equal $RECORD_COUNT 1 "Records from master #$COUNT : <$RECORD_COUNT>"
+            ok_equal $BLOB_CONTENT "$SAMPLE_BLOB" "Blob from master #$COUNT : <$BLOB_CONTENT>"
+            ok_equal $TEXT_CONTENT "$SAMPLE_T" "Text from master #$COUNT : <$TEXT_CONTENT>"
+            ok_equal $DATE_CONTENT "$SAMPLE_D" "Date from master #$COUNT : <$DATE_CONTENT>"
+            ok_equal $TIME_CONTENT "$SAMPLE_TIME" "Time from master #$COUNT : <$TIME_CONTENT>"
+            ok_equal "$DT_CONTENT" "$SAMPLE_DT" "Datetime from master #$COUNT : <$DT_CONTENT>"
+            ok_equal "$TS_CONTENT" "$SAMPLE_TS" "Timestamp from master #$COUNT : <$TS_CONTENT>"
+            ok_equal "$F_CONTENT" "$SAMPLE_F" "Double from master #$COUNT : <$F_CONTENT>"
+            ok_equal "$ENUM_CONTENT" "$SAMPLE_ENUM" "ENUM from master #$COUNT : <$ENUM_CONTENT>"
+
+            ok_equal "$TINYINT_CONTENT" "$SAMPLE_TINYINT" "TINYINT from master #$COUNT : <$TINYINT_CONTENT>"
+            ok_equal "$TINYINT_U_CONTENT" "$SAMPLE_U_TINYINT" "UNSIGNED TINYINT from master #$COUNT : <$TINYINT_U_CONTENT>"
+            ok_equal "$SMALLINT_CONTENT" "$SAMPLE_SMALLINT" "SMALLINT from master #$COUNT : <$SMALLINT_CONTENT>"
+            ok_equal "$SMALLINT_U_CONTENT" "$SAMPLE_U_SMALLINT" "UNSIGNED SMALLINT from master #$COUNT : <$SMALLINT_U_CONTENT>"
+            ok_equal "$MEDIUMINT_CONTENT" "$SAMPLE_MEDIUMINT" "MEDIUMINT from master #$COUNT : <$MEDIUMINT_CONTENT>"
+            ok_equal "$MEDIUMINT_U_CONTENT" "$SAMPLE_U_MEDIUMINT" "UNSIGNED MEDIUMINT from master #$COUNT : <$MEDIUMINT_U_CONTENT>"
+            ok_equal "$INT_CONTENT" "$SAMPLE_INT" "INT from master #$COUNT : <$INT_CONTENT>"
+            ok_equal "$INT_U_CONTENT" "$SAMPLE_U_INT" "UNSIGNED INT from master #$COUNT : <$INT_U_CONTENT>"
+            ok_equal "$BIGINT_CONTENT" "$SAMPLE_BIGINT" "BIGINT from master #$COUNT : <$BIGINT_CONTENT>"
+            ok_equal "$BIGINT_U_CONTENT" "$SAMPLE_U_BIGINT" "UNSIGNED BIGINT from master #$COUNT : <$BIGINT_U_CONTENT>"
+
+            ok_equal "$SET_CONTENT" "$SAMPLE_SET" "SET from master #$COUNT : <$SET_CONTENT>"
+            # $MYSQL -h $SLAVE -e "select * from test.t$COUNT"
+        done
+        HOW_MANY_SERVICES=$($TREPCTL -host $SLAVE services | grep role | grep slave| wc -l)
+        # echo "#S> $HOW_MANY_SERVICES"
+        ok_greater  $HOW_MANY_SERVICES $EXPECTED_SERVICES_SLAVE "Slave $SLAVE has at least $EXPECTED_SERVICES_SLAVE services"
+    done
+
+done  # iter
+
+check_if_replicators_are_running 'After tests'
+check_security_status
+
+if [ -f $cookbook_dir/data_loading ]
+then
+    if [ -n "$CHECK_CONTENTS" ]
+    then
+        $cookbook_dir/load_data stop
+        exit_code=$?
+        if [ "$exit_code" != "0" ]
+        then
+            FAILED=$(($FAILED+$exit_code))
+            TESTS=$(($TESTS+$exit_code))
+        fi
+    fi
+fi
+
+#
+PASSED_PERCENTAGE=$(ruby -e 'print eval(ARGV[0])' "$PASSED.0/$TESTS.0*100" )
+FAILED_PERCENTAGE=$(ruby -e 'print eval(ARGV[0])' "$FAILED.0/$TESTS.0*100" )
+
+printf "# passed: %4d (%6.2f%%)\n" $PASSED $PASSED_PERCENTAGE
+printf "# failed: %4d (%6.2f%%)\n" $FAILED $FAILED_PERCENTAGE
+
+echo "1..$TESTS"
+exit $FAILED

@@ -1,0 +1,228 @@
+#!/bin/bash
+# (C) Copyright 2012,2013 Continuent, Inc - Released under the New BSD License
+# Version 1.0.8 - 2013-09-03
+cookbook_dir=$(dirname $0)
+
+if [ -f $cookbook_dir/../CURRENT_TOPOLOGY ]
+then
+    echo "There is already a cluster installed - Can't proceed."
+    echo -n "Currently installed topology: "
+    cat $cookbook_dir/../CURRENT_TOPOLOGY
+    exit 1
+fi
+
+
+INSTALL_LOG=install_log.txt
+TEST_LOG=test_log.txt
+
+echo "# `date`" > $INSTALL_LOG
+echo "# `date`" > $TEST_LOG
+
+export VERBOSE=1
+exit_code=0
+NODES=''
+row_counter=0
+mixed_counter=0
+statement_counter=0
+
+function install_topology
+{
+    TOPOLOGY=$1
+    METHOD=$2
+    export USE_TPM=1
+    unset USE_OLD_INSTALLER
+    rm -f deploy.cfg*
+    echo "# $TOPOLOGY (using $METHOD)" 
+    echo "# $TOPOLOGY" >> $INSTALL_LOG
+    echo "# $TOPOLOGY" >> $TEST_LOG
+    UCTOPOLOGY=$(perl -e "print uc '$TOPOLOGY'")
+    $cookbook_dir/install_$TOPOLOGY > $INSTALL_LOG.tmp
+    exit_code=$?
+    cat $INSTALL_LOG.tmp
+    cat $INSTALL_LOG.tmp >> $INSTALL_LOG
+
+    if [ "$exit_code" != "0" ]
+    then
+        echo "# ERROR installing $TOPOLOGY (using $METHOD)"
+        # cat $INSTALL_LOG
+        configure_log=$(ls -lotr /tmp/tungsten-configure*log | tail -n 1 | awk '{print $NF}')
+        cat $configure_log
+        exit $exit_code
+    fi
+    if [ -f /tmp/test_log$$ ] ; then rm /tmp/test_log$$ ; fi
+    . $cookbook_dir/BOOTSTRAP.sh NODES_$UCTOPOLOGY.sh
+    export NODES=$cookbook_dir/NODES_$UCTOPOLOGY.sh
+}
+
+function uninstall_topology
+{
+    export I_WANT_TO_UNINSTALL=1
+    export STOP_REPLICATORS=1
+    export REMOVE_TUNGSTEN_BASE=1
+    export REMOVE_SERVICE_SCHEMA=1
+    export REMOVE_TEST_SCHEMAS=1
+    export CLEAN_NODE_DATABASE_SERVER=1
+    $cookbook_dir/clear_cluster >> $INSTALL_LOG
+    unset I_WANT_TO_UNINSTALL
+    if [ -n "$KILL_JAVA_PROCESS" ]
+    then
+        # Making sure that all the remaining processes are removed
+        pkill -9 wrapper
+        pkill -9 java 
+    fi
+}
+
+function set_mode_counters
+{
+    mode=$1
+    counter=$2
+    mode=$(echo $mode | tr '[A-Z]' '[a-z]')
+    case $mode in 
+        row)
+            row_counter=$(($row_counter+$counter))
+            ;;
+        mixed)
+            mixed_counter=$(($mixed_counter+$counter))
+            ;;
+        statement)
+            statement_counter=$(($statement_counter+$counter))
+            ;;
+        *)
+            echo "unknown mode '$mode'"
+            exit 1
+            ;;
+    esac
+}
+
+function test_one_topology
+{
+    TOPOLOGY=$1
+    METHOD=$2
+    . $NODES
+    MYSQL_VERSION=$($MYSQL -h ${MASTERS[0]} -BN -e 'select version()'| perl -lne 'print $1 if /(\d+\.\d+)/')
+    export DEPLOYMENT_BANNER="MySQL $MYSQL_VERSION"
+    if [ -z "$MYSQL_VERSION" ]
+    then
+        echo "error detecting MySQL version"
+        exit 1
+    fi
+
+    if [ -n "$TEST_UNDER_LOAD" ]
+    then
+        $cookbook_dir/load_data >> $INSTALL_LOG
+    fi
+    formats=(statement row mixed)
+    if [ "$MYSQL_VERSION" == "5.0" ]
+    then
+        formats=(statement)
+    fi
+    for MODE in ${formats[*]}
+    do
+        if [ "$MYSQL_VERSION" != "5.0" ]
+        then
+            for MASTER in ${MASTERS[*]}
+            do
+                $MYSQL -h $MASTER -e "set global binlog_format=$MODE"
+            done 
+        fi
+        echo "# testing with binlog_format=$MODE" >> /tmp/test_log$$ 
+        echo "# testing with binlog_format=$MODE" 
+        if [ -n "$WITH_SECURITY" ]
+        then
+            export LOG_PREFIX="${METHOD}_${MODE}_SECURE"
+        else
+            export LOG_PREFIX="${METHOD}_$MODE"
+        fi
+        $cookbook_dir/show_cluster 
+        $cookbook_dir/show_cluster >> $INSTALL_LOG
+        ##############################################
+        $cookbook_dir/test_cluster >> /tmp/test_log$$
+        exit_code=$?
+        cat /tmp/test_log$$
+        WAS_MODE_USED=$(grep -i "# binlog format: $MODE" /tmp/test_log$$ | wc -l)
+        set_mode_counters $MODE $WAS_MODE_USED 
+        if [ "$exit_code" != "0" ]
+        then
+            echo "# ERROR testing $TOPOLOGY (using $METHOD)"
+            $cookbook_dir/collect_logs > /dev/null
+            exit $exit_code
+        fi
+        ##############################################
+        $cookbook_dir/show_cluster 
+        $cookbook_dir/show_cluster | tee -a $INSTALL_LOG
+        cat /tmp/test_log$$ >> $TEST_LOG
+    done
+    if [ -n "$TEST_UNDER_LOAD" ]
+    then
+        SAVE_TEST_OPTIONS=$LOAD_TEST_OPTIONS
+        export LOAD_TEST_OPTIONS="$LOAD_TEST_OPTIONS --remove=all"
+        export CHECK_CONTENTS=1
+        $cookbook_dir/load_data stop
+        export LOAD_TEST_OPTIONS=$SAVE_TEST_OPTIONS
+    fi
+
+    cat /tmp/test_log$$
+    rm /tmp/test_log$$
+}
+
+[ -z "$INSTALLERS" ] && INSTALLERS='tpm'
+
+if [ -n "$WITH_SECURITY" ]
+then
+    INSTALLERS=tpm
+fi
+
+[ -z "$TOPOLOGIES" ] && TOPOLOGIES='master_slave fan_in all_masters star'
+
+for TOPOLOGY in $TOPOLOGIES
+do
+    for METHOD in $INSTALLERS
+    do
+        export LOG_PREFIX=$METHOD
+        install_topology $TOPOLOGY $METHOD
+
+        test_one_topology $TOPOLOGY $METHOD
+        
+        $cookbook_dir/collect_logs > /dev/null
+        uninstall_topology
+    done
+done
+
+OK=$(grep "^ok" $TEST_LOG| wc -l)
+NOTOK=$(grep "^not ok" $TEST_LOG | wc -l)
+if [ -z "$OK" ] ; then OK='0' ; fi
+if [ -z "$NOTOK" ] ; then NOTOK='0' ; fi
+TESTS=$(($OK+$NOTOK))
+echo ""
+
+
+echo "#"
+echo "# Tests by replication mode:"
+echo "# Statement: $statement_counter"
+echo "# Mixed: $mixed_counter"
+echo "# Row: $row_counter"
+echo "#"
+if [ "$MYSQL_VERSION" != "5.0" ]
+then
+    if [ "$row_counter" == "0" ] 
+    then
+        echo "not ok - No RBR tests were running"
+        TESTS=$(($TESTS+1))
+        NOTOK=$(($NOTOK+1))
+        OK=$(($OK+1))
+    else
+        echo "ok - RBR tests were running"
+    fi
+fi
+
+PASSED_PERCENTAGE=$(ruby -e 'printf "%6.2f", eval(ARGV[0])' "$OK.0/$TESTS.0*100" )
+FAILED_PERCENTAGE=$(ruby -e 'printf "%6.2f", eval(ARGV[0])' "$NOTOK.0/$TESTS.0*100" )
+echo "# tests : $TESTS"
+echo "# pass  : $OK ($PASSED_PERCENTAGE%)"
+echo "# fail  : $NOTOK ($FAILED_PERCENTAGE%)"
+
+#
+# The desired number of NOT OK tests is 0.
+# We exit with this number, which will make the test fail if there were any 'not ok' in the results
+#
+exit $NOTOK

@@ -1,0 +1,93 @@
+#!/bin/bash
+# (C) Copyright 2012,2013 Continuent, Inc - Released under the New BSD License
+# Version 1.0.7 - 2013-08-28
+cookbook_dir=$(dirname $0)
+
+if [ ! -f $cookbook_dir/../CURRENT_TOPOLOGY ]
+then
+    echo "This command requires an installed cluster"
+    exit 1
+fi
+
+TOPOLOGY=$(echo $(cat CURRENT_TOPOLOGY) | tr '[a-z]' '[A-Z]')
+
+NODES=NODES_$TOPOLOGY.sh
+
+if [ ! -f $cookbook_dir/BOOTSTRAP.sh ]
+then
+    echo "$cookbook_dir/BOOTSTRAP.sh not found"
+    exit 1
+fi
+
+if [ ! -f $cookbook_dir/utilities.sh ]
+then
+    echo "$cookbook_dir/utilities.sh not found"
+    exit 1
+fi
+
+. $cookbook_dir/BOOTSTRAP.sh $NODES
+. $cookbook_dir/utilities.sh 
+
+fill_roles
+
+[ -z "$TMPDIR" ] && export TMPDIR=/tmp
+
+if [ ! -d $TMPDIR ]
+then
+    export TMPDIR=$PWD
+fi
+
+if [ -n "$DEPLOYMENT_BANNER" ]
+then
+    DEPLOYMENT_BANNER="<$DEPLOYMENT_BANNER>"
+fi
+echo $LONG_LINE
+echo "Topology: '$TOPOLOGY' $DEPLOYMENT_BANNER"
+echo $LONG_LINE
+if [ "$TOPOLOGY" == 'MASTER_SLAVE_DIRECT' ]
+then
+    ALL_NODES=${ALL_SLAVES[*]}
+else
+    for NODE in ${MASTERS[*]}
+    do
+        SERVICE=$($TREPCTL -host $NODE services |$SIMPLE_SERVICES -r master -a list)
+        if [ -n "$HEARTBEAT" ]
+        then
+            $TREPCTL -host $NODE -service $SERVICE heartbeat
+        fi
+    done
+fi
+
+for NODE in ${ALL_NODES[*]}
+do
+    $TREPCTL -host $NODE services -full | grep -w masterConnectUri > $TMPDIR/services$$.secure.$NODE &
+    $TREPCTL -host $NODE services > $TMPDIR/services$$.$NODE &
+done
+
+wait
+exit_code=0
+for NODE in ${ALL_NODES[*]}
+do
+    IS_SECURE=$(grep 'thls://' $TMPDIR/services$$.secure.$NODE)
+    SECURITY_FLAG=''
+    if [ -n "$IS_SECURE" ]
+    then
+        SECURITY_FLAG="(ssl)"
+    fi
+    echo "# node $NODE $SECURITY_FLAG"
+
+    SERVICES_RUNNING=$(grep role $TMPDIR/services$$.$NODE)
+    if [ -n "$SERVICES_RUNNING" ]
+    then
+        cat $TMPDIR/services$$.$NODE | $SIMPLE_SERVICES
+    else
+        echo "error running 'trepctl services'"
+        cat $TMPDIR/services$$.$NODE 
+        exit_code=1
+    fi
+
+    rm $TMPDIR/services$$.$NODE
+    rm $TMPDIR/services$$.secure.$NODE
+done
+
+exit $exit_code

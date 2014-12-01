@@ -1,0 +1,273 @@
+#!/bin/bash
+# (C) Copyright 2012,2013 Continuent, Inc - Released under the New BSD License
+# Version 1.0.8 - 2013-09-01
+
+cookbook_dir=$(dirname $0)
+
+[ -z "$MYSQL_VERSION" ] && MYSQL_VERSION=5.5.30
+[ -z "$MYSQL_PORT" ]    && MYSQL_PORT=17100
+[ -z "$SANDBOX_DIR" ]   && SANDBOX_DIR=tungsten_deployment
+SSH='ssh -o StrictHostKeyChecking=no'
+SCP='scp -o StrictHostKeyChecking=no'
+UPDATE_USER_VALUES=1
+NODES_LIST=
+REMOVE_SANDBOXES=$cookbook_dir/remove_sandboxes
+RESTORE_USER_VALUES=$cookbook_dir/restore_user_values
+
+for F in $REMOVE_SANDBOXES $RESTORE_USER_VALUES 
+do
+    if [ -f  $F ]
+    then
+        echo "Found the file $F. "
+        echo "It means that there is another set of sandboxes installed and a modified USER_VALUES.sh"
+        echo "To continue, please uninstall the sandboxes "
+        echo " and return the file USER_VALUES.sh to its prior contents using $RESTORE_USER_VALUES."
+        exit 1
+    fi
+done
+
+NODES_FILE=COMMON_NODES
+TARBALL=
+
+function show_help {
+    echo "deploy_sandboxes "
+    echo "usage $0 [options] "
+    echo '-h               => help'
+    echo "-P port          => MySQL port  ($MYSQL_PORT)"
+    echo "-d sandbox dir   => sandbox directory name ($SANDBOX_DIR)"
+    echo "-m version       => MySQL version ($MYSQL_VERSION)"
+    echo "-n nodes file    => NODES file to load ($NODES_FILE)"
+    echo "-l list of nodes =>list of nodes to use instead of the ones in the NODES file"
+    echo '-t tarball       => MySQL tarball to install remotely (none)'
+    echo '-U               => DO NOT update USER_VALUES.sh (yes by default)'
+    echo ""
+    echo "This command takes the list of nodes in COMMON_NODES.sh and installs a MySQL sandbox in each one."
+    echo "It then modifies USER_VALUES.sh with the info pointing to the sandboxes."
+    echo "After that, you can install in the sandboxes, instead of using the default values."
+    exit 1
+}
+
+args=$(getopt hUP:m:n:d:l:t: $*)
+
+if [ $? != 0 ]
+then
+    show_help
+fi
+
+set -- $args
+
+for i
+do
+    case "$i"
+        in
+        -h)
+            show_help
+            ;;
+        -d)
+            export SANDBOX_DIR=$2
+            shift
+            shift
+            ;;
+        -n)
+            export NODES_FILE=$2
+            shift
+            shift
+            ;;
+        -l)
+            export NODES_LIST=$(echo $2 | tr ',' ' ')
+            count=0
+            for NODE in $NODES_LIST
+            do
+                NODES[$count]=$NODE
+                count=$(($count+1))
+            done
+            export UPDATE_USER_VALUES=
+            shift
+            shift
+            ;;
+        -m)
+            export MYSQL_VERSION=$2
+            shift
+            shift
+            ;;
+        -P)
+            export MYSQL_PORT=$2
+            if [ ! -d ~/opt/mysql/$MYSQL_VERSION ]
+            then
+                echo "Directory $MYSQL_VERSION not found in ~/opt/mysql"
+                exit 1
+            fi
+            shift
+            shift
+            ;;
+        -t)
+            export TARBALL=$2
+            if [ ! -f $TARBALL ]
+            then
+                echo " file $TARBALL not found"
+                exit 1
+            fi
+            shift
+            shift
+            ;;
+        -U)
+            # disable updating of USER_VALUES
+            export UPDATE_USER_VALUES=
+            shift
+            ;;
+        --)
+            shift
+            break
+            ;;
+    esac
+done
+
+
+if [ -n "$1" ]
+then
+    echo "unexpected argument '$1'"
+    show_help
+fi
+
+if [ -z "$NODES_LIST" ]
+then
+    if [ ! -f $cookbook_dir/$NODES_FILE.sh ]
+    then
+        echo "could not find $cookbook_dir/$NODES_FILE.sh"
+        exit 1
+    fi
+    . $cookbook_dir/$NODES_FILE.sh
+    if [ $NODES_FILE == "COMMON_NODES" ]
+    then
+        NODES=($NODE1 $NODE2 $NODE3 $NODE4 $NODE5 $NODE6 $NODE7 $NODE8 $NODE9 $NODE10)
+    else
+        NODES=$ALL_NODES
+    fi
+fi
+
+# remove the sandbox if it already exists
+for HOST in ${NODES[*]} 
+do 
+    $SSH $HOST "if [ -d $HOME/sandboxes/$SANDBOX_DIR ] ; then sbtool -o delete -s $HOME/sandboxes/$SANDBOX_DIR > /dev/null ; fi" 
+done
+
+BUILD_SB=$HOME/build_sb.sh
+
+echo "#!/bin/bash" > $BUILD_SB
+echo 'SANDBOX_EXISTS=$(for P in `echo $PATH | tr ":" " "` ; do if [ -f $P/make_sandbox ] ; then echo $P/make_sandbox ; fi; done)' >> $BUILD_SB
+echo 'if [ -z "$SANDBOX_EXISTS" ] ; then hostname; echo "make_sandbox not found in PATH" ; exit 1; fi' >> $BUILD_SB
+
+echo 'SANDBOX_OPTIONS="--no_confirm  --no_show -c server-id=$1 -c log-bin=mysql-bin -c log-slave-updates -c innodb_flush_log_at_trx_commit=1"' >> $BUILD_SB
+echo 'export SANDBOX_OPTIONS="$SANDBOX_OPTIONS -c open_files_limit=65535 -c default-storage-engine=innodb -c max_allowed_packet=52M -c sync-binlog=1 --remote_access=%"' >> $BUILD_SB
+if [ -n "$TARBALL" ]
+then
+    BASE_TARBALL=$(basename $TARBALL)
+    echo "make_sandbox \$HOME/opt/mysql/$BASE_TARBALL -- --sandbox_port=$MYSQL_PORT \\" >> $BUILD_SB
+else
+    echo "make_sandbox $MYSQL_VERSION -- --sandbox_port=$MYSQL_PORT \\" >> $BUILD_SB
+fi
+echo "   --sandbox_directory=$SANDBOX_DIR  \$SANDBOX_OPTIONS" >> $BUILD_SB
+chmod +x $BUILD_SB
+
+SERVER_ID_COUNTER=0
+for HOST in  ${NODES[*]}
+do
+   SERVER_ID_COUNTER=$(($SERVER_ID_COUNTER+10))
+   if [ -n "$TARBALL" ]
+   then
+        $SSH $HOST 'if [ ! -d $HOME/opt/mysql ] ; then mkdir -p $HOME/opt/mysql ; fi' 
+        $SCP -p $TARBALL $HOST:~/opt/mysql
+   fi
+   $SCP -p $BUILD_SB $HOST:$BUILD_SB
+   $SSH $HOST $BUILD_SB $SERVER_ID_COUNTER
+   if [ "$?" != "0" ]
+   then
+       echo "Error installing sandbox in node $HOST"
+       exit 1
+   fi
+done
+
+. $cookbook_dir/USER_VALUES.sh
+
+GRANT_QUERY="grant all on *.* to $DATABASE_USER identified by '$DATABASE_PASSWORD' with grant option"
+for HOST in  ${NODES[*]}
+do
+   $HOME/sandboxes/$SANDBOX_DIR/use -h $HOST -e 'update mysql.user set Grant_Priv="Y" where user="msandbox"; flush privileges'
+   $HOME/sandboxes/$SANDBOX_DIR/use -h $HOST -e "$GRANT_QUERY"
+done
+
+if [ -z "$UPDATE_USER_VALUES" ]
+then
+    exit
+fi
+
+# updating USER_VALUES
+
+echo "#!/bin/bash" > $REMOVE_SANDBOXES
+for HOST in ${NODES[*]} 
+do 
+    CMD="$SSH $HOST 'if [ -d $HOME/sandboxes/$SANDBOX_DIR ] ; then sbtool -o delete -s $HOME/sandboxes/$SANDBOX_DIR ; fi'"
+    echo $CMD >> $REMOVE_SANDBOXES
+done
+echo 'rm -f $0' >> $REMOVE_SANDBOXES
+
+echo "#!/bin/bash" > $RESTORE_USER_VALUES
+echo "cp $cookbook_dir/USER_VALUES.sh $cookbook_dir/USER_VALUES.sh.sandbox" >> $RESTORE_USER_VALUES
+echo "cp $cookbook_dir/USER_VALUES.local.sh $cookbook_dir/USER_VALUES.local.sh.sandbox" >> $RESTORE_USER_VALUES
+echo "cp $cookbook_dir/USER_VALUES.sh.save $cookbook_dir/USER_VALUES.sh" >> $RESTORE_USER_VALUES
+echo "cp $cookbook_dir/USER_VALUES.local.sh.save $cookbook_dir/USER_VALUES.local.sh" >> $RESTORE_USER_VALUES
+echo "echo 'USER_VALUES.sh and USER_VALUES.local.sh were restored to their contents prior to the sandbox installation'" >> $RESTORE_USER_VALUES
+echo 'rm -f $0' >> $RESTORE_USER_VALUES
+
+chmod +x $REMOVE_SANDBOXES
+chmod +x $RESTORE_USER_VALUES
+
+INCLUDE_FILE=$cookbook_dir/USER_VALUES.local.sh 
+
+cp $cookbook_dir/USER_VALUES.sh $cookbook_dir/USER_VALUES.sh.save
+cp $cookbook_dir/USER_VALUES.local.sh $cookbook_dir/USER_VALUES.local.sh.save
+
+function comment_text
+{
+    filename=$1
+    find_string=$2
+    BAK=''
+    if [ -n "$4" ]
+    then
+        BAK='.bak'
+    fi
+    echo "# replacing '$find_string' in $filename"
+    perl -i$BAK -pe "s{^(export\s+$find_string)}{# Replaced by deploy_sandboxes - look at $INCLUDE_FILE \\n# \$1}"  $filename
+}
+
+comment_text $cookbook_dir/USER_VALUES.sh 'BINLOG_DIRECTORY' 
+comment_text $cookbook_dir/USER_VALUES.sh 'MY_CONF'
+comment_text $cookbook_dir/USER_VALUES.sh 'MYSQL_BOOT_SCRIPT'
+comment_text $cookbook_dir/USER_VALUES.sh 'DATABASE_PORT'
+
+LINE='------------------------------------------------------------------------'
+echo "# $LINE" >> $INCLUDE_FILE
+echo "# Updated by $0 at $(date)"
+
+echo "export BINLOG_DIRECTORY=$HOME/sandboxes/$SANDBOX_DIR/data" >> $INCLUDE_FILE
+echo "export MY_CNF=$HOME/sandboxes/$SANDBOX_DIR/my.sandbox.cnf" >> $INCLUDE_FILE
+echo "export MYSQL_BOOT_SCRIPT=$HOME/sandboxes/$SANDBOX_DIR/msb" >> $INCLUDE_FILE
+echo "export DATABASE_PORT=$MYSQL_PORT" >> $INCLUDE_FILE
+echo "export MORE_TPM_OPTIONS='$MORE_TPM_OPTIONS --preferred-path=$HOME/opt/mysql/$MYSQL_VERSION/bin'" >> $INCLUDE_FILE
+echo "export PATH=$HOME/opt/mysql/$MYSQL_VERSION/bin:$PATH" >> $INCLUDE_FILE
+echo "# $LINE" >> $INCLUDE_FILE
+
+echo "# Updated $INCLUDE_FILE with the values for the sandboxes"
+echo "# The file $INCLUDE_FILE is loaded within $cookbook_dir/USER_VALUES.sh"
+echo ""
+echo "# The file $INCLUDE_FILE contains:"
+echo ""
+cat $INCLUDE_FILE
+ 
+echo $LINE
+echo "to remove the sandboxes, run "
+echo "$REMOVE_SANDBOXES"
+echo $LINE
+echo "to restore USER_VALUES.sh to its original contents, run" 
+echo "$RESTORE_USER_VALUES"
+

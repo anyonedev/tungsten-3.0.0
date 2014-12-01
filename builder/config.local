@@ -1,0 +1,2 @@
+SRC_DIR=../
+SKIP_CHECKOUT=1

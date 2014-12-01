@@ -1,0 +1,142 @@
+#!/bin/bash
+# (C) Copyright 2012,2013 Continuent, Inc - Released under the New BSD License
+# Version 1.0.5 - 2013-04-03
+
+cookbook_dir=$(dirname $0)
+
+SSH='ssh -o StrictHostKeyChecking=no'
+SCP='scp -o StrictHostKeyChecking=no'
+export USE_TPM=1
+if [ -n "$USE_OLD_INSTALLER" ]
+then
+    unset USE_TPM
+fi
+
+
+function warning_deprecated
+{
+    LINE="### ---------------------------------------------------------------------------------"
+    echo $LINE
+    echo "## WARNING: This command is deprecated "
+    echo "## Future versions of Tungsten Cookbook will only support tpm-based installations"
+    echo "## To upgrade with tpm, please set the variable 'USE_TPM' and start again "
+    echo $LINE
+}
+
+if [ -z "$USE_TPM" ]
+then
+    warning_deprecated
+fi
+
+cd "$cookbook_dir/../"
+
+if [ -f CURRENT_TOPOLOGY ]
+then
+    echo "Found an installed topology. (look at ./CURRENT_TOPOLOGY)"
+    cat CURRENT_TOPOLOGY
+    echo ""
+    echo "To upgrade an existing deployment, unpack the tarball in a new staging location and run this command again."
+    exit 1
+fi
+
+for NEEDED in COMMON_NODES USER_VALUES
+do
+    if [ -f $cookbook_dir/$NEEDED.sh ]
+    then
+        . $cookbook_dir/$NEEDED.sh 
+    else
+        echo "$NEEDED.sh not found in $cookbook_dir"
+        exit 1
+    fi
+done
+
+NODES=($NODE1 $NODE2 $NODE3 $NODE4 $NODE5 $NODE6 $NODE7 $NODE8)
+
+echo "#This scripts gives you the commands needed to upgrade your replication deoplyment "
+echo "# using (${NODES[*]})"
+echo "# (Please check that your nodes are accounted for, and change the above list accordingly if they aren't)"
+echo "# The procedure will stop each replicator and upgrade the software in '$TUNGSTEN_BASE'"
+echo "# also notice that I will use username, password, and database port from $cookbook_dir/USER_VALUES.sh:"
+echo "# Please make sure that they are correct before proceeding."
+echo ""
+
+echo "# Which topology is currently installed?"
+echo "# 1. master_slave"
+echo "# 2. all_masters"
+echo "# 3. fan_in"
+echo "# 4. star"
+echo "# 0. NO KNOWN TOPOLOGY - Back to manual upgrade"
+echo ""
+
+PROMPT='# Enter the topology number: '
+
+while [ -z "$CURRENT_TOPOLOGY" ]
+do
+    read -p "$PROMPT" n
+    case $n in
+        0) exit;;
+        1) CURRENT_TOPOLOGY=master_slave;;
+        2) CURRENT_TOPOLOGY=all_masters;;
+        3) CURRENT_TOPOLOGY=fan_in;;
+        4) CURRENT_TOPOLOGY=star;;
+        *) echo "Invalid choice. Please enter a number from 0 to 4"; ;;
+    esac
+done
+
+if [ "$CURRENT_TOPOLOGY" == "star" ]
+then
+    MORE_OPTIONS="$MORE_OPTIONS -a --property=replicator.service.comments=true"
+fi
+
+MY_COOKBOOK_CNF=$cookbook_dir/my.cookbook.cnf
+echo "[client]" > $MY_COOKBOOK_CNF
+echo "user=$DATABASE_USER" >> $MY_COOKBOOK_CNF
+echo "password=$DATABASE_PASSWORD" >> $MY_COOKBOOK_CNF
+echo "port=$DATABASE_PORT" >> $MY_COOKBOOK_CNF
+
+echo "#-------------------------------------------"
+echo "# Using definitions saved in $MY_COOKBOOK_CNF:"
+perl -pe 's/^/# /' $MY_COOKBOOK_CNF
+echo "#-------------------------------------------"
+
+echo "# These commands will upgrade your system:"
+
+if [ -n "$USE_TPM" ]
+then
+    HOST_LIST=''
+    for NODE in ${NODES[*]}
+    do
+        # echo "$SSH $NODE $TUNGSTEN_BASE/tungsten/tungsten-replicator/bin/replicator stop"
+        if [ -n "$HOST_LIST" ]
+        then
+            HOST_LIST="$HOST_LIST,"
+        fi
+        HOST_LIST="$HOST_LIST$NODE"
+    done
+    echo "if [ -f ./deploy.cfg ] ; then rm ./deploy.cfg ; fi"
+    echo "./tools/tpm fetch --hosts=$HOST_LIST --release-directory=$TUNGSTEN_BASE"
+    echo "./tools/tpm update "
+    # echo "./tools/tpm start"
+    for NODE in ${NODES[*]}
+    do
+        echo "$SSH $NODE 'echo $CURRENT_TOPOLOGY > $TUNGSTEN_BASE/tungsten/CURRENT_TOPOLOGY ' "
+    done
+    echo "echo $CURRENT_TOPOLOGY > ./CURRENT_TOPOLOGY "
+
+else
+    warning_deprecated
+    for NODE in ${NODES[*]}
+    do
+        echo "# Upgrading node $NODE"
+        echo "$SSH $NODE $TUNGSTEN_BASE/tungsten/tungsten-replicator/bin/replicator stop"
+
+        echo "./tools/update  --release-directory=$TUNGSTEN_BASE --host=$NODE $MORE_OPTIONS"
+        if [ "$CURRENT_TOPOLOGY" != "master_slave" ]
+        then
+            echo "$SSH $NODE $TUNGSTEN_BASE/tungsten/tungsten-replicator/bin/replicator restart"
+        fi
+        echo "$SSH $NODE $TUNGSTEN_BASE/tungsten/tungsten-replicator/bin/replicator status"
+    done
+
+    echo "echo $CURRENT_TOPOLOGY > ./CURRENT_TOPOLOGY"
+fi

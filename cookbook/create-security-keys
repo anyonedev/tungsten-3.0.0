@@ -1,0 +1,127 @@
+#!/bin/bash
+# (C) Copyright 2012,2013 Continuent, Inc - Released under the New BSD License
+# Version 1.0.6 - 2013-08-11
+
+cookbook_dir=$(dirname $0)
+pushd $cookbook_dir > /dev/null; cookbook_dir=$PWD; popd > /dev/null
+
+keystore=$cookbook_dir/keystore.jks
+truststore=$cookbook_dir/truststore.ts
+certificate=$cookbook_dir/client.cer
+password_store=$cookbook_dir/passwords.store
+jmxremote=$cookbook_dir/jmxremote.access
+
+
+KEYSTORE_ALIAS=cookbook_cluster
+CREATOR_NAME=Tungsten_Cookbook
+ORGANIZATIONAL_UNIT=Community
+ORGANIZATION=Continuent
+COUNTRY=US
+
+[ -z "$KEYSTORE_PASSWORD" ] && KEYSTORE_PASSWORD=$1
+[ -z "$AUTH_PASSWORD" ] && AUTH_PASSWORD=$2
+[ -z "$AUTH_USER" ] && AUTH_USER=cookbook
+
+for FILE in $keystore $truststore $certificate $password_store
+do
+    if [ -f $FILE ]
+    then
+        echo "File $FILE already exists - please move it or delete it before continuing"
+        CONFLICT=1
+    fi
+done
+
+if [ -n "$CONFLICT" ]
+then
+    exit 1
+fi
+
+keytool=$(which keytool)
+
+if [ "$?" != "0" ]
+then
+    echo "'keytool' not found"
+    echo "You should install Java SDK to get this tool"
+    exit 1
+fi
+
+tpasswd=./cluster-home/bin/tpasswd
+
+if [ ! -x $tpasswd ]
+then
+    echo "$tpasswd not found"
+    exit 1
+fi
+
+if [ "$1" == "-h" -o "$1" == "--help" -o "$1" == "-help" ]
+then
+   echo "Syntax $0 password_for_key_stores password_for_authentication"
+   echo "Where 'password_for_key_stores' is the password to open the key stores needed for security"
+   echo "and 'password_for_authentication' is the password needed to authenticate the replicators across the network."
+   echo "You can use the same password for both."
+   exit 1
+fi
+
+if [ -z "$KEYSTORE_PASSWORD" ]
+then
+    echo "password required"
+    exit 1
+fi
+
+if [ -z "$AUTH_PASSWORD" ]
+then
+    AUTH_PASSWORD=$KEYSTORE_PASSWORD
+fi
+keytool -genkey -alias $KEYSTORE_ALIAS -keyalg RSA -keystore $keystore -dname "cn=$CREATOR_NAME, ou=$ORGANIZATIONAL_UNIT, o=$ORGANIZATION, c=$COUNTRY" -keypass $KEYSTORE_PASSWORD -storepass $KEYSTORE_PASSWORD
+
+if [ ! -f $keystore ]
+then
+    echo "Error running keytool - Creation of $keystore failed"
+    exit 1
+fi
+
+keytool -export -alias $KEYSTORE_ALIAS -file $certificate -keystore $keystore -keypass $KEYSTORE_PASSWORD -storepass $KEYSTORE_PASSWORD
+
+if [ ! -f $certificate ]
+then
+    echo "Error running keytool - Creation of $certificate failed"
+    exit 1
+fi
+
+keytool -import -v -trustcacerts -alias $KEYSTORE_ALIAS -file $certificate -keystore $truststore  -keypass $KEYSTORE_PASSWORD -storepass $KEYSTORE_PASSWORD -noprompt
+
+if [ ! -f $truststore ]
+then
+    echo "Error running keytool - Creation of $truststore failed"
+    exit 1
+fi
+
+$tpasswd -c $AUTH_USER $AUTH_PASSWORD -p $password_store -e -ts $truststore -tsp $AUTH_PASSWORD
+$tpasswd -c $AUTH_USER $AUTH_PASSWORD -p $password_store -e -ts $truststore -tsp $AUTH_PASSWORD -target rmi_jmx
+
+
+SECURITY_OPTIONS="
+    --thl-ssl=true \
+    --rmi-ssl=true \
+    --rmi-authentication=true \
+    --rmi-user=$AUTH_USER \
+    --java-keystore-password=$KEYSTORE_PASSWORD \
+    --java-truststore-password=$KEYSTORE_PASSWORD \
+    --java-truststore-path=$truststore \
+    --java-keystore-path=$keystore \
+    --java-jmxremote-access-path=$jmxremote \
+    --java-passwordstore-path=$password_store "
+
+echo $SECURITY_OPTIONS > $cookbook_dir/security.options
+LINE="# ---------------------------------------------------------------------"
+echo $LINE
+echo "# Options for tpm"
+echo $SECURITY_OPTIONS | perl -pe 's/--/\\\n\t--/g'
+echo $LINE
+
+
+echo "$AUTH_USER        readwrite \\
+              create javax.management.monitor.*,javax.management.timer.* \\
+              unregister
+" > $jmxremote
+

@@ -1,0 +1,72 @@
+#!/bin/bash
+# (C) Copyright 2012,2013 Continuent, Inc - Released under the New BSD License
+# Version 1.0.7 - 2013-08-28
+cookbook_dir=$(dirname $0)
+
+if [ ! -f CURRENT_TOPOLOGY ]
+then
+    echo "This command requires an installed cluster"
+    exit 1
+fi
+
+TOPOLOGY=$(echo $(cat CURRENT_TOPOLOGY) | tr '[a-z]' '[A-Z]')
+
+NODES=NODES_$TOPOLOGY.sh
+
+if [ ! -f $cookbook_dir/BOOTSTRAP.sh ]
+then
+    echo "$cookbook_dir/BOOTSTRAP.sh not found"
+    exit 1
+fi
+
+if [ ! -f $cookbook_dir/utilities.sh ]
+then
+    echo "$cookbook_dir/utilities.sh not found"
+    exit 1
+fi
+
+. $cookbook_dir/BOOTSTRAP.sh $NODES
+
+REPLICATOR_LOGS_DIR=$TUNGSTEN_BASE/tungsten/tungsten-replicator/log
+REPLICATOR_CONF_DIR=$TUNGSTEN_BASE/tungsten/tungsten-replicator/conf
+REPLICATOR_CONFIG1="$TUNGSTEN_BASE/configs/tungsten.cfg"
+REPLICATOR_CONFIG2="$TUNGSTEN_BASE/conf/tungsten.cfg"
+REPLICATOR_CONFIG_TPM="$TUNGSTEN_BASE/tungsten.cfg"
+[ -z "$LOG_PREFIX" ] && LOG_PREFIX='TR_LOGS'
+
+LOGS_DIR="${LOG_PREFIX}_${TOPOLOGY}_$(date "+%Y-%m-%d_%H_%M_%S")"
+for NODE in ${ALL_NODES[*]}
+do
+    mkdir -p $LOGS_DIR/$NODE/log
+    mkdir -p $LOGS_DIR/$NODE/conf
+    $SCP $NODE:"$REPLICATOR_LOGS_DIR/*.log" $LOGS_DIR/$NODE/log
+    $SCP $NODE:"$REPLICATOR_CONF_DIR/static*.properties" $LOGS_DIR/$NODE/conf
+    $SCP $NODE:$TUNGSTEN_BASE/tungsten/cookbook/{USER_VALUES,COMMON_NODES}.sh $LOGS_DIR/$NODE/conf
+    $SCP $NODE:$TUNGSTEN_BASE/tungsten/cookbook/NODES_{ALL_MASTERS,MASTER_SLAVE,FAN_IN,STAR}.sh $LOGS_DIR/$NODE/conf
+    $SCP $NODE:$TUNGSTEN_BASE/tungsten/cookbook/current_install.{log,summary} $LOGS_DIR/$NODE/conf
+    for CNF in $REPLICATOR_CONFIG1 $REPLICATOR_CONFIG2 $REPLICATOR_CONFIG_TPM
+    do
+        FILE_EXISTS=$($SSH $NODE "if [ -f $CNF ] ; then echo yes; fi")
+        if [ "$FILE_EXISTS" == "yes" ]
+        then
+            $SCP $NODE:"$CNF" $LOGS_DIR/$NODE/conf
+        fi
+    done
+    for SERVICE in $($TREPCTL -host $NODE services | grep serviceName| awk '{print $3}') 
+    do
+        $TREPCTL -host $NODE -service $SERVICE status > $LOGS_DIR/$NODE/trepctl_status_$SERVICE.txt
+        $SSH $NODE $THL -service $SERVICE info > $LOGS_DIR/$NODE/thl_info_$SERVICE.txt
+        $SSH $NODE $THL -service $SERVICE index > $LOGS_DIR/$NODE/thl_index_$SERVICE.txt
+    done
+done
+LOGS_ARCHIVE="$LOGS_DIR.tar.gz"
+tar -c $LOGS_DIR | gzip -c9 > $LOGS_ARCHIVE
+echo "$PWD/$LOGS_ARCHIVE saved"
+if [ -n "$STORE_LOGS_DIR" ]
+then
+    if [ -d $STORE_LOGS_DIR ]
+    then
+        cp -v $LOGS_ARCHIVE $STORE_LOGS_DIR
+    fi
+fi
+

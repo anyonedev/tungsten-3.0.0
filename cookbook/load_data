@@ -1,0 +1,271 @@
+#!/bin/bash
+# (C) Copyright 2012,2013 Continuent, Inc - Released under the New BSD License
+# Version 1.0.14 - 2014-05-27
+cookbook_dir=$(dirname $0)
+
+function gethelp
+{
+    echo "syntax: $0 [start|stop|print|help] (default: start)"
+    echo "Starts (or stops) a Bristlecone load in every master deployed in the current topology"
+    echo ""
+    echo "Environment variables that can be used:"
+    echo "CHECK_CONTENTS=1  will activate database checksum (used after 'stop')"
+    echo "LOAD_TEST_OPTIONS=some_options will pass some_options to concurrent_evaluator.pl (for example LOAD_TEST_OPTIONS=--instances=5)"
+    echo ""
+    echo "For more info about this load, see "
+    echo  "./bristlecone/bin/concurrent_evaluator.pl --help"
+    exit
+}
+
+if [ -f CURRENT_TOPOLOGY ]
+then
+    TOPOLOGY=$(cat CURRENT_TOPOLOGY| tr '[:lower:]' '[:upper:]')
+    NODES=NODES_$TOPOLOGY
+else
+    echo "CURRENT_TOPOLOGY not found" 
+    exit
+fi
+
+OPERATION=start
+if [ -n "$1" ]
+then
+    OPERATION=$1
+fi
+
+case $OPERATION in
+    start)
+        if [ -f $cookbook_dir/data_loading ]
+        then
+            echo "A load is already running (found $cookbook_dir/data_loading)"
+            echo "Stop current load before starting a new one"
+            exit 1
+        fi
+        ;;
+    stop)
+        ;;
+    help)
+        gethelp
+        ;;
+    print)
+        ;;
+    *)
+        echo "unrecognized operation '$OPERATION'"
+        gethelp
+        ;;
+esac
+
+for REQUIRED in USER_VALUES $NODES utilities BOOTSTRAP
+do
+    if [ ! -f $cookbook_dir/$REQUIRED.sh ]
+    then
+        echo "could not find $cookbook_dir/$REQUIRED.sh"
+        exit 1
+    fi
+done
+
+. $cookbook_dir/USER_VALUES.sh
+. $cookbook_dir/$NODES.sh
+. $cookbook_dir/BOOTSTRAP.sh $NODES.sh
+. $cookbook_dir/utilities.sh 
+
+DRYRUN=
+if [ "$OPERATION" == "print" ]
+then
+    DRYRUN=1
+    OPERATION=start
+    VERBOSE=1
+fi
+
+[ -n "$VERBOSE" ] && echo "# Determining current roles"
+
+fill_roles
+
+JOB_INFO_PATH=$TUNGSTEN_BASE/tungsten/load
+
+CHECKSUM_DBS=()
+[[ $LOAD_TEST_OPTIONS =~ --instances=([0-9]*) ]] && INSTANCES=${BASH_REMATCH[1]} || INSTANCES=1
+
+for HOST in  ${MASTERS[*]}
+do
+    unset SKIP
+    if [ "$TOPOLOGY" == "STAR" ]
+    then
+        if [ "$HOST" == "$HUB" ]
+        then
+            SKIP=1
+        fi
+    fi
+    db=$(echo $HOST | tr '\.' '_' )
+    db=$(echo $db | tr '-' '_' )
+    if [ "$OPERATION" == "start" ]
+    then
+        if [ -d $JOB_INFO_PATH/$db ]
+        then
+            rm -rf $JOB_INFO_PATH/$db/*
+        else
+            mkdir -p $JOB_INFO_PATH/$db
+        fi
+    fi
+
+    BRISTLECONE_OPTIONS="--deletes=1 --updates=1 --inserts=1 --test-duration=3600"
+    EVALUATOR="$TUNGSTEN_BASE/tungsten/bristlecone/bin/concurrent_evaluator.pl"
+    DB_OPTIONS="--host=$HOST --port=$DATABASE_PORT --mysql-defaults-file=$MY_COOKBOOK_CNF --user=$DATABASE_USER --password=$DATABASE_PASSWORD"
+    EV_OPTIONS="--continuent-root=$TUNGSTEN_BASE -d $db -s $JOB_INFO_PATH/$db $LOAD_TEST_OPTIONS"
+    if [ -n "$CHECK_CONTENTS" ]
+    then
+        CHECKSUM_DBS[$COUNTER]=$db
+        COUNTER=$(($COUNTER+1))
+        if [ "$INSTANCES" -gt "1" ]
+        then
+            for N in $(seq 1 $INSTANCES); do
+                CHECKSUM_DBS[$COUNTER]=$db$N
+                    COUNTER=$(($COUNTER+1))
+            done
+        else
+            CHECKSUM_DBS[$COUNTER]=$db
+            COUNTER=$(($COUNTER+1))
+        fi
+    fi
+    V=''
+    [ -n "$VERBOSE" ] && [ "$OPERATION" == "stop" ] && V='--verbose'
+    CMD="$EVALUATOR $BRISTLECONE_OPTIONS $DB_OPTIONS $EV_OPTIONS $V $OPERATION"
+    if [ -n "$VERBOSE" ]
+    then
+        if [ -z "$SKIP" ]
+        then
+            echo "$CMD" | perl -pe 's/ -/ \\\n\t-/g'
+        fi
+    fi
+    if [ -z "$DRYRUN" ]
+    then
+        if [ -z "$SKIP" ]
+        then
+            $CMD
+        fi
+    fi
+done
+
+function catch_up_replication
+{
+    TIMEOUT=$1
+    [ -z "$TIMEOUT" ] && TIMEOUT=120
+    # Before attempting a checksum, we need to make sure that replication has happened till the latest seqno in all services
+    if [ -n "$HUB" -a -n "$HUB_SERVICE" ]
+    then
+        $cookbook_dir/trepctl -host $HUB -service $HUB_SERVICE heartbeat
+        sleep 5
+    fi
+    for update in $($cookbook_dir/multi_trepctl --role master --fields host,service,seqno --output list --hide-headers | tr ';' ' ')
+    do
+        # echo "<$update>"
+        master=$(echo $update | tr ',' ' ' | awk '{print $1}')
+        service=$(echo $update | tr ',' ' ' | awk '{print $2}')
+        seqno=$(echo $update | tr ',' ' ' | awk '{print $3}')
+        
+        # When using asymmetric topologies, such as star, some events from the spokes are not reported to all the other spokes.
+        if [ "$TOPOLOGY" == "STAR" ]
+        then
+            seqno=$(($seqno-1))
+        fi
+
+        if [ -n "$VERBOSE" ]
+        then
+            echo "# master $master - service: $service - seqno : $seqno"
+        fi
+        for HOST in ${ALL_NODES[*]}
+        do
+            if [ "$HOST" != "$master" ]
+            then
+                has_service=$($cookbook_dir/trepctl -host $HOST services |grep serviceName |grep $service )
+                if [ -n "$has_service" ]
+                then
+                    $cookbook_dir/trepctl -host $HOST -service $service wait -applied $seqno -limit $TIMEOUT
+                    slave_seqno=$($cookbook_dir/trepctl -host $HOST -service $service status | grep appliedLastSeqno | awk '{print $3}')
+                    ok_greater $slave_seqno $seqno "Slave $HOST has applied seqno $slave_seqno within $TIMEOUT seconds"
+                    if [ -n "$VERBOSE" ]
+                    then
+                        echo "# host: $HOST - service: $service -  seqno: $slave_seqno"
+                    fi  
+                fi
+            fi
+        done
+    done
+}
+
+function check_contents
+{
+    echo ""
+    [ -z "$TESTS" ]  && TESTS=0
+    [ -z "$PASSED" ] && PASSED=0
+    [ -z "$FAILED" ] && FAILED=0
+    TIMEOUT=120
+    catch_up_replication $TIMEOUT
+
+    for DB in ${CHECKSUM_DBS[*]}
+    do
+        FIRST_COUNT=''
+        for HOST in ${ALL_NODES[*]}
+        do
+            DB_EXISTS=$($MYSQL -h $HOST -BN -e "show schemas like '$DB'")
+            if [ "$DB_EXISTS" == "$DB" ]
+            then
+                echo -n "# COUNT host $HOST - db: $DB - "
+                COUNT=$($MYSQL -h $HOST -BN -e "select count(*) from $DB.tbl3")
+                echo $COUNT
+                if [ -n "$FIRST_COUNT" ]
+                then
+                    ok_equal $COUNT $FIRST_COUNT "Count in host $HOST (db $DB) matches"
+                else
+                    FIRST_COUNT=$COUNT
+                fi
+            fi
+        done
+    done
+
+    for DB in ${CHECKSUM_DBS[*]}
+    do
+        FIRST_CRC=''
+        for HOST in ${ALL_NODES[*]}
+        do
+            DB_EXISTS=$($MYSQL -h $HOST -BN -e "show schemas like '$DB'")
+            if [ "$DB_EXISTS" == "$DB" ]
+            then
+                echo -n "# CRC host $HOST - db $DB - "
+                CRC=$($MYSQL -h $HOST -BN -e "checksum table $DB.tbl3" | awk '{print $2}')
+                echo $CRC
+                if [ -n "$FIRST_CRC" ]
+                then
+                    ok_equal $CRC $FIRST_CRC "CRC in host $HOST (db $DB) matches"
+                else
+                    FIRST_CRC=$CRC
+                fi
+            fi
+        done
+    done
+    #
+    PASSED_PERCENTAGE=$(ruby -e 'print eval(ARGV[0])' "$PASSED.0/$TESTS.0*100" )
+    FAILED_PERCENTAGE=$(ruby -e 'print eval(ARGV[0])' "$FAILED.0/$TESTS.0*100" )
+
+    echo $DASHLINE
+    echo "# --- provisional tally --- "
+    printf "# passed: %4d (%6.2f%%)\n" $PASSED $PASSED_PERCENTAGE
+    printf "# failed: %4d (%6.2f%%)\n" $FAILED $FAILED_PERCENTAGE
+    echo $DASHLINE
+    echo ""
+    [ "$FAILED" != "0" ] && exit $FAILED
+}
+
+case "$OPERATION" in
+    start) 
+        touch $cookbook_dir/data_loading
+        ;;
+    stop)
+        if [ -n "$CHECK_CONTENTS" ]
+        then
+            sleep 1
+            check_contents
+        fi
+        rm -f $cookbook_dir/data_loading
+        ;;
+esac
+

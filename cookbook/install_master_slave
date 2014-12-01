@@ -1,0 +1,82 @@
+#!/bin/bash
+# (C) Copyright 2012,2013 Continuent, Inc - Released under the New BSD License
+# Version 1.0.14 - 2014-07-21
+
+cookbook_dir=$(dirname $0)
+cd "$cookbook_dir/../"
+
+if [ ! -f $cookbook_dir/BOOTSTRAP.sh ]
+then
+    echo "$cookbook_dir/BOOTSTRAP.sh not found"
+    exit 1
+fi
+. $cookbook_dir/BOOTSTRAP.sh NODES_MASTER_SLAVE.sh
+. $cookbook_dir/utilities.sh
+
+check_installed
+check_if_nodes_are_reachable
+
+# $cookbook_dir/clear_cluster
+
+export MASTER=${MASTERS[0]}
+
+echo "installing MASTER/SLAVE" >$INSTALL_LOG
+date >> $INSTALL_LOG
+
+
+if [ -n "$VALIDATE_ONLY"  ]
+then
+    export USE_TPM=1
+    MORE_OPTIONS="$MORE_OPTIONS --validate-only -a"
+    if [ -n "$VERBOSE" ]
+    then
+        if [ "$VERBOSE" -gt "1" ]
+        then
+            MORE_OPTIONS="$MORE_OPTIONS --verbose"
+        else
+            MORE_OPTIONS="$MORE_OPTIONS --info"
+        fi
+    fi
+    echo "# Performing validation check ..."
+fi
+
+check_security
+rm -f deploy.cfg*
+
+INSTALL_COMMAND="./tools/tpm install $TUNGSTEN_SERVICE \
+--reset \
+--master=$MASTER \
+--log=timestamp \
+--replication-user=$DATABASE_USER \
+--replication-password=$DATABASE_PASSWORD \
+--replication-port=$DATABASE_PORT \
+--home-directory=$TUNGSTEN_BASE \
+--slaves=$SLAVES_LIST \
+--datasource-mysql-conf=$MY_CNF \
+--datasource-log-directory=$BINLOG_DIRECTORY \
+-a --datasource-boot-script=$MYSQL_BOOT_SCRIPT \
+--repl-disable-relay-logs=true \
+--rmi-port=$RMI_PORT \
+--thl-port=$THL_PORT \
+--topology=master-slave \
+$MORE_OPTIONS $MORE_TPM_OPTIONS $SECURITY_OPTIONS --$START_OPTION"     
+
+# echo $INSTALL_COMMAND | perl -pe 's/--/\\\n\t--/g' >> $INSTALL_LOG
+# $INSTALL_COMMAND
+run_command $INSTALL_COMMAND 
+
+if [ "$?" != "0"  ]
+then
+    exit 1
+fi
+
+if [ -n "$VALIDATE_ONLY" ]
+then
+    exit 0
+fi
+
+echo "master_slave" > $CURRENT_TOPOLOGY
+
+$cookbook_dir/show_cluster 
+
+post_installation
