@@ -187,7 +187,7 @@ public class DDLScan
      * @return Rendered template data.
      */
     public String scan(String tablesToFind,
-            Hashtable<String, String> templateOptions, Writer writer)
+            Hashtable<String, Object> templateOptions, Writer writer)
             throws ReplicatorException, InterruptedException, SQLException,
             IOException
     {

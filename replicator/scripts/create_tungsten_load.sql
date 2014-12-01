@@ -9,6 +9,7 @@ DECLARE
 v_path varchar2(300) := '&1';
 v_pub_user varchar2(30) := '&2';
 specific_file boolean := ('&3' = '1');
+ignore_tables boolean := ('&4' = '1');
 
 BEGIN
 
@@ -42,6 +43,26 @@ ELSE
    END;
 END IF;
 
+IF ignore_tables and not(specific_file) THEN 
+   EXECUTE IMMEDIATE 'CREATE OR REPLACE DIRECTORY tungsten_dir AS ''' || v_path ||'''';
+
+   BEGIN
+      EXECUTE IMMEDIATE 'CREATE TABLE tungsten_ignore(tableName VARCHAR2(30)) ORGANIZATION EXTERNAL (TYPE ORACLE_LOADER DEFAULT DIRECTORY tungsten_dir
+         ACCESS PARAMETERS (RECORDS DELIMITED BY NEWLINE
+         NOLOGFILE NOBADFILE NODISCARDFILE LOAD WHEN ((1:1) != "#") FIELDS TERMINATED BY ''	'' LRTRIM MISSING FIELD VALUES ARE NULL REJECT ROWS WITH ALL NULL FIELDS) LOCATION (''ignore.tables'')) REJECT LIMIT UNLIMITED';
+   EXCEPTION WHEN OTHERS THEN
+      -- This should not happen
+      DBMS_OUTPUT.PUT_LINE ('Table tungsten_ignore already exists. Skipping');
+   END;
+
+ELSE
+   BEGIN 
+      EXECUTE IMMEDIATE 'CREATE TABLE tungsten_ignore(tableName VARCHAR2(30))';
+   EXCEPTION WHEN OTHERS THEN
+      -- This should not happen
+      DBMS_OUTPUT.PUT_LINE ('Table tungsten_ignore already exists. Skipping');
+   END;
+END IF;
 END;
 /
 

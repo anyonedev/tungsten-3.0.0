@@ -79,7 +79,7 @@ ELSIF tableCount > 0 THEN
    END;
 ELSE
    DECLARE
-      CURSOR C IS SELECT table_name FROM ALL_TABLES where owner=v_user;
+      CURSOR C IS SELECT table_name FROM ALL_TABLES where owner=v_user AND table_name NOT in (SELECT tableName FROM SYS.tungsten_ignore);
    BEGIN
       OPEN C;
       LOOP

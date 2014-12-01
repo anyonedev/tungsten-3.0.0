@@ -70,6 +70,7 @@ public class ParallelExtractor implements RawExtractor
     private int                           activeThreads         = 0;
     private PluginContext                 context;
     private String                        chunkDefinitionFile   = null;
+    private String                        ignoreTablesFile   = null;
 
     private Hashtable<String, Long>       tableBlocks;
 
@@ -156,7 +157,7 @@ public class ParallelExtractor implements RawExtractor
         queue = new ArrayBlockingQueue<DBMSEvent>(queueSize);
 
         chunksGeneratorThread = new ChunksGeneratorThread(dataSource,
-                extractChannels, chunks, chunkDefinitionFile, chunkSize);
+                extractChannels, chunks, chunkDefinitionFile, ignoreTablesFile, chunkSize);
 
         tableBlocks = new Hashtable<String, Long>();
 
@@ -333,4 +334,15 @@ public class ParallelExtractor implements RawExtractor
             this.chunkDefinitionFile = chunkDefinitionFile;
         }
     }
+
+    /**
+     * Set the path to file containing table names which need to be ignored
+     * 
+     * @param ignoreTablesFile
+     */
+    public void setIgnoreTablesFile(String ignoreTablesFile)
+    {
+        this.ignoreTablesFile = ignoreTablesFile;
+    }
+
 }

@@ -59,7 +59,7 @@ else
 fi
 
 echo "Setup tungsten_load (SYSDBA)"
-sqlplus -S -L ${SYSDBA} @create_tungsten_load.sql $specificpath $pub_user $specific_tables
+sqlplus -S -L ${SYSDBA} @create_tungsten_load.sql $specificpath $pub_user $specific_tables $ignore_tables
 RC=$?
 [ ${RC} -ne 0 ] && echo "ERROR: [$RC] sqlplus statement failed" && exit 1
 echo "Done."

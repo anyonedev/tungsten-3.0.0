@@ -528,7 +528,11 @@ public class OracleCDCReaderThread extends Thread
                         {
                             if (buffer.length() > 0)
                                 buffer.append('\t');
-                            buffer.append(resultset.getString(i));
+                            if (resultset.getMetaData().getColumnType(i) == Types.BLOB) {
+                                buffer.append("<BLOB Data>");
+                            }else {
+                                buffer.append(resultset.getString(i));
+                            }
                         }
 
                         if (logger.isDebugEnabled())

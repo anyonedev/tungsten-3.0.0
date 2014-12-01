@@ -35,7 +35,7 @@ BEGIN
       
   v_column_list := '''' || v_column_list || '''';
   v_quoted_table := '''' || v_table_name  || '''';
-  v_ct_name := 'CT_' || SUBSTR(v_table_name, 1, 27);
+  v_ct_name := v_table_name;
   v_quoted_ct_name := '''' || v_ct_name  || '''';
   v_quoted_schema := '''' || v_user || '''';
   v_quoted_cs_name := '''' || v_change_set_name || ''''; 

@@ -399,6 +399,7 @@ replicator.extractor.parallel-extractor.dataSource=global
 # Path to the chunk definition file. If the file is not provided or is not
 # present, all information will be extracted.
 replicator.extractor.parallel-extractor.ChunkDefinitionFile=${replicator.home.dir}/conf/chunks.csv
+replicator.extractor.parallel-extractor.IgnoreTablesFile=${replicator.home.dir}/conf/ignore_tables.csv
 
 # How many rows should be handle in one chunk
 replicator.extractor.parallel-extractor.chunk_size=2000

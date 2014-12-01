@@ -25,9 +25,11 @@ package com.continuent.tungsten.replicator.thl.serializer;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.Reader;
 import java.io.Serializable;
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.sql.Blob;
 import java.sql.Clob;
 import java.sql.Date;
 import java.sql.SQLException;
@@ -787,11 +789,11 @@ public class ProtobufSerializer implements Serializer
 
                 try
                 {
-                    byte[] blob = ((SerialBlob) value).getBytes(1,
-                            (int) ((SerialBlob) value).length());
+                    byte[] blob = ((Blob) value).getBytes(1,
+                            (int) ((Blob) value).length());
                     valueBuilder.setBytesValue(ByteString.copyFrom(blob));
                 }
-                catch (SerialException e)
+                catch (SQLException e)
                 {
                     logger.error("Failed to serialize blob", e);
                 }
@@ -828,7 +830,23 @@ public class ProtobufSerializer implements Serializer
                 // CLOB
                 if (value instanceof Clob)
                 {
-                    valueBuilder.setStringValue(((Clob) value).toString());
+                    try
+                    {
+                       Reader reader = ((Clob) value).getCharacterStream();
+                       char[] arr = new char[1024];
+                       StringBuilder buffer = new StringBuilder();
+                       int numCharsRead;
+                       while ((numCharsRead = reader.read(arr, 0, arr.length)) != -1)
+                       {
+                            buffer.append(arr, 0, numCharsRead);
+                       }
+                       reader.close();
+                       valueBuilder.setStringValue(buffer.toString());
+                     }
+                     catch (Exception e)
+                     {
+                         logger.error("Failed to serialize clob", e);
+                     }
                 }
                 else
                     valueBuilder.setStringValue((String) value);

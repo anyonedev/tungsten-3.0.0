@@ -1,0 +1,49 @@
+<AnalyticsConfig>
+   <!-- IgnoreTables>
+     <Table name="RPL_ORDER_FORECAST_IB_STAGING"/>
+   </IgnoreTables -->
+   <!-- ColumnDataTypeOverrides>
+   <ColumnDataTypeOverride column="str_udf1" datatype="TEXT"/>
+   <ColumnDataTypeOverride column="str_udf2" datatype="TEXT"/>
+   <ColumnDataTypeOverride column="str_udf3" datatype="TEXT"/>
+   <ColumnDataTypeOverride column="str_udf4" datatype="TEXT"/>
+   <ColumnDataTypeOverride column="str_udf5" datatype="TEXT"/>
+   <ColumnDataTypeOverride column="str_udf6" datatype="TEXT"/>
+   <ColumnDataTypeOverride column="str_udf7" datatype="TEXT"/>
+   <ColumnDataTypeOverride column="str_udf8" datatype="TEXT"/>
+   <ColumnDataTypeOverride column="str_udf9" datatype="TEXT"/>
+   <ColumnDataTypeOverride column="str_udf10" datatype="TEXT"/>
+   <ColumnDataTypeOverride column="str_udf11" datatype="TEXT"/>
+   <ColumnDataTypeOverride column="str_udf12" datatype="TEXT"/>
+   <ColumnDataTypeOverride column="str_udf13" datatype="TEXT"/>
+   <ColumnDataTypeOverride column="str_udf14" datatype="TEXT"/>
+   <ColumnDataTypeOverride column="str_udf15" datatype="TEXT"/>
+   <ColumnDataTypeOverride column="str_udf16" datatype="TEXT"/>
+   <ColumnDataTypeOverride column="str_udf17" datatype="TEXT"/>
+   <ColumnDataTypeOverride column="str_udf18" datatype="TEXT"/>
+   <ColumnDataTypeOverride column="str_udf19" datatype="TEXT"/>
+   <ColumnDataTypeOverride column="str_udf20" datatype="TEXT"/>
+   <ColumnDataTypeOverride column="str_udf21" datatype="TEXT"/>
+   <ColumnDataTypeOverride column="str_udf22" datatype="TEXT"/>
+   <ColumnDataTypeOverride column="str_udf23" datatype="TEXT"/>
+   <ColumnDataTypeOverride column="str_udf24" datatype="TEXT"/>
+   <ColumnDataTypeOverride column="str_udf25" datatype="TEXT"/>
+   </ColumnDataTypeOverrides -->
+   <!-- SuppressIndices>
+      <!-- 
+           name: name of index
+           table: name of the table on which index is to be suppressed 
+       ->
+      <Index name="ACK_AWAIT_CONFIG_UNQ" table="ACK_AWAIT_CONFIG"/>
+   </SuppressIndices -->
+   <!-- AdditionalIndices>
+     <!-- 
+         name: name of index
+         table: name of the table from source database
+         cols: comma separated column names which need to be indexed. Order is important.
+         type: UNIQUE|FULLTEXT|SPATIAL (Default value is UNIQUE)
+      ->
+     <Index name="TEST_UNQ" table="ACK_AWAIT_CONFIG" cols="sys_ack_await_config_id, vc_id"/>
+	 <Index name="TEST_UNQ1" table="ACK_AWAIT_CONFIG" cols="model_name" type="FULLTEXT"/>
+   </AdditionalIndices -->
+</AnalyticsConfig>

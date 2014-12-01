@@ -94,6 +94,7 @@ IF tableCount > 0 THEN
                      IF v_column_type != 'DATE'
                         AND v_column_type != 'NUMBER'
                         AND instr(v_column_type, 'NCLOB') < 1 
+                        AND instr(v_column_type, 'CLOB') < 1
                         AND instr(v_column_type, 'BLOB') < 1
                         AND instr(v_column_type, 'TIMESTAMP') < 1 then
                         v_column_list := v_column_list || '('||column_type_len||')';
@@ -110,7 +111,8 @@ IF tableCount > 0 THEN
                      v_column_list := v_column_name || ' ' ||v_column_type;
                      IF v_column_type != 'DATE'
                         AND v_column_type != 'NUMBER'
-                        AND instr(v_column_type, 'NCLOB') < 1 
+                        AND instr(v_column_type, 'NCLOB') < 1
+                        AND instr(v_column_type, 'CLOB') < 1						
                         AND instr(v_column_type, 'BLOB') < 1
                         AND instr(v_column_type, 'TIMESTAMP') < 1 then
                         v_column_list := v_column_list || '('||column_type_len||')';
@@ -140,7 +142,8 @@ IF tableCount > 0 THEN
                      v_column_list := v_column_list || ', ' || v_column_name || ' ' ||v_column_type;
                      IF v_column_type != 'DATE'
                         AND v_column_type != 'NUMBER'
-                        AND instr(v_column_type, 'NCLOB') < 1 
+                        AND instr(v_column_type, 'NCLOB') < 1
+                        AND instr(v_column_type, 'CLOB') < 1						
                         AND instr(v_column_type, 'BLOB') < 1
                         AND instr(v_column_type, 'TIMESTAMP') < 1 then
                         v_column_list := v_column_list || '('||column_type_len||')';
@@ -157,7 +160,8 @@ IF tableCount > 0 THEN
                      v_column_list := v_column_name || ' ' ||v_column_type;
                      IF v_column_type != 'DATE'
                         AND v_column_type != 'NUMBER'
-                        AND instr(v_column_type, 'NCLOB') < 1 
+                        AND instr(v_column_type, 'NCLOB') < 1
+                        AND instr(v_column_type, 'CLOB') < 1						
                         AND instr(v_column_type, 'BLOB') < 1
                         AND instr(v_column_type, 'TIMESTAMP') < 1 then
                         v_column_list := v_column_list || '('||column_type_len||')';
@@ -181,7 +185,7 @@ IF tableCount > 0 THEN
    END;
 ELSE
    DECLARE
-      CURSOR C1 IS SELECT table_name FROM ALL_TABLES where owner=v_user and table_name not like 'AQ$%'and table_name not like 'CDC$%';
+      CURSOR C1 IS SELECT table_name FROM ALL_TABLES where owner=v_user and table_name not like 'AQ$%'and table_name not like 'CDC$%' AND table_name NOT in (SELECT tableName FROM SYS.tungsten_ignore);
    BEGIN
       OPEN C1;
       LOOP
@@ -210,6 +214,7 @@ ELSE
                   IF v_column_type != 'DATE'
                      AND v_column_type != 'NUMBER'
                      AND instr(v_column_type, 'NCLOB') < 1
+                     AND instr(v_column_type, 'CLOB') < 1
                      AND instr(v_column_type, 'BLOB') < 1
                      AND instr(v_column_type, 'TIMESTAMP') < 1 then
                      v_column_list := v_column_list || '('||column_type_len||')';
@@ -227,6 +232,7 @@ ELSE
                   IF v_column_type != 'DATE'
                      AND v_column_type != 'NUMBER'
                      AND instr(v_column_type, 'NCLOB') < 1
+                     AND instr(v_column_type, 'CLOB') < 1
                      AND instr(v_column_type, 'BLOB') < 1
                      AND instr(v_column_type, 'TIMESTAMP') < 1 then
                      v_column_list := v_column_list || '('||column_type_len||')';

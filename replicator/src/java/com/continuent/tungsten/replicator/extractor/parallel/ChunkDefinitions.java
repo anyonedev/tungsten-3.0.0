@@ -24,12 +24,14 @@ package com.continuent.tungsten.replicator.extractor.parallel;
 
 import java.io.FileReader;
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.LinkedList;
 
 import org.apache.log4j.Logger;
 
 import au.com.bytecode.opencsv.CSVReader;
 
+import com.continuent.tungsten.common.csv.CsvException;
 import com.continuent.tungsten.replicator.ReplicatorException;
 
 /**
@@ -119,6 +121,22 @@ public class ChunkDefinitions
         protected long getChunkSize()
         {
             return chunkSize;
+        }
+        
+        @Override
+        public boolean equals(Object obj)
+        {
+            if (this == obj){
+                return true;
+            }
+            if (obj instanceof ChunkRequest){
+                ChunkRequest chunkReq = (ChunkRequest) obj;
+                return this.schema.equals(chunkReq.schema) && 
+                       this.table.equals(chunkReq.table) && 
+                       Arrays.equals(columns, chunkReq.columns) &&
+                       this.chunkSize == chunkReq.chunkSize;
+            }
+            return false;
         }
     }
 

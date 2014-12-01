@@ -119,7 +119,9 @@ public class ChunksGeneratorThread extends Thread
     private Database             connection;
     private BlockingQueue<Chunk> chunks;
     private String               chunkDefFile;
+    private String               ignoreTablesFile;
     private ChunkDefinitions     chunkDefinition;
+    private ChunkDefinitions     ignoreTablesDefinition;
     private int                  extractChannels;
     private long                 chunkSize = 1000;
     private String               eventId   = null;
@@ -137,12 +139,13 @@ public class ChunksGeneratorThread extends Thread
      */
     public ChunksGeneratorThread(UniversalDataSource datasource,
             int extractChannels, BlockingQueue<Chunk> chunks,
-            String chunkDefinitionFile, long chunkSize)
+            String chunkDefinitionFile, String ignoreTableFile, long chunkSize)
     {
         this.setName("ChunkGeneratorThread");
         this.dataSource = datasource;
         this.chunks = chunks;
         this.chunkDefFile = chunkDefinitionFile;
+        this.ignoreTablesFile = ignoreTableFile;
         this.extractChannels = extractChannels;
         if (chunkSize > 0)
             this.chunkSize = chunkSize;
@@ -187,6 +190,15 @@ public class ChunksGeneratorThread extends Thread
         {
             e.printStackTrace();
         }
+
+        if (ignoreTablesFile != null){
+            ignoreTablesDefinition = new ChunkDefinitions(ignoreTablesFile);
+            try{
+                ignoreTablesDefinition.parseFile();
+               } catch (Exception e){
+                e.printStackTrace();
+               }
+            }
 
         // Check whether we have to use a chunk definition file
         if (chunkDefFile != null)
@@ -315,7 +327,10 @@ public class ChunksGeneratorThread extends Thread
             {
                 for (Table table : tablesFromSchema)
                 {
-                    generateChunksForTable(table, -1, null);
+                    ChunkRequest tableReq = new ChunkRequest(table.getSchema(), table.getName());
+                    if (!ignoreTablesDefinition.getChunksDefinitions().contains(tableReq)){
+                        generateChunksForTable(table, -1, null);
+                    }
                 }
 
             }

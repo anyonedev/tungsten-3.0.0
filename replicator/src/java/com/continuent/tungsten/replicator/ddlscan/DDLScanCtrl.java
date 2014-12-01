@@ -82,7 +82,7 @@ public class DDLScanCtrl
 
     private String                templateFile      = null;
     private String                additionalPath    = null;
-    Hashtable<String, String>     templateOptions   = null;
+    Hashtable<String, Object>     templateOptions   = null;
     private String                outFile           = null;
 
     private DDLScan               scanner           = null;
@@ -97,7 +97,7 @@ public class DDLScanCtrl
     public DDLScanCtrl(String url, String user, String pass, String db,
             String tables, String tableFile, String templateFile,
             String outFile, String renameDefinitions,
-            Hashtable<String, String> templateOptions, String additionalPath)
+            Hashtable<String, Object> templateOptions, String additionalPath)
             throws Exception
     {
         // JDBC connection string.
@@ -329,7 +329,7 @@ public class DDLScanCtrl
             String renameDefinitions = null;
 
             // Options to pass to template.
-            Hashtable<String, String> templateOptions = new Hashtable<String, String>();
+            Hashtable<String, Object> templateOptions = new Hashtable<String, Object>();
 
             // Parse command line arguments.
             ArgvIterator argvIterator = new ArgvIterator(argv);
@@ -589,7 +589,8 @@ public class DDLScanCtrl
                 + DBNAME_VAR + " in the URL, if needed)");
         println("  -template file   - Specify template file to render");
         println("  -path path       - Add additional search path for loading Velocity templates");
-        println(" [-opt opt val]    - Option(s) to pass to template, try: -opt help me");
+        println(" [-opt opt val]    - Option(s) to pass to template, try: -opt help me. Use analytics_cfg for specifying One analytics cfg file.");
+        println("                     Use 'analytics_cfg' opt for specifying One analytics config file. Refer ../samples/analytics/an_ddl_config.xml");
         println(" [-out file]       - Render to file (print to stdout if not specified)");
         println("  -help            - Print this help display");
     }
