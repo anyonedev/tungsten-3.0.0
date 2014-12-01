@@ -84,6 +84,7 @@ public class DDLScanCtrl
     private String                additionalPath    = null;
     Hashtable<String, Object>     templateOptions   = null;
     private String                outFile           = null;
+    private String                indicesOutFile    = null;
 
     private DDLScan               scanner           = null;
 
@@ -96,7 +97,7 @@ public class DDLScanCtrl
      */
     public DDLScanCtrl(String url, String user, String pass, String db,
             String tables, String tableFile, String templateFile,
-            String outFile, String renameDefinitions,
+            String outFile, String indicesOutFile, String renameDefinitions,
             Hashtable<String, Object> templateOptions, String additionalPath)
             throws Exception
     {
@@ -115,6 +116,7 @@ public class DDLScanCtrl
         this.additionalPath = additionalPath;
         this.templateOptions = templateOptions;
         this.outFile = outFile;
+        this.indicesOutFile = indicesOutFile;
 
         // Rename definitions file.
         this.renameDefinitions = renameDefinitions;
@@ -165,6 +167,7 @@ public class DDLScanCtrl
             ReplicatorException, SQLException, IOException
     {
         Writer writer = null;
+        Writer indicesWriter = null;
 
         try
         {
@@ -197,20 +200,32 @@ public class DDLScanCtrl
         else
             writer = new BufferedWriter(new FileWriter(new File(outFile)));
 
+        if (indicesOutFile == null)
+            indicesWriter = new StringWriter();
+        else 
+            indicesWriter = new BufferedWriter(new FileWriter(new File(indicesOutFile)));
+
         // Summarize tables to stdout if we are going to an output file.
         if (tables != null && outFile != null)
             println("tables = " + tables);
 
-        scanner.scan(tables, templateOptions, writer);
+        scanner.scan(tables, templateOptions, writer, indicesWriter);
 
         // Flush and cleanup.
         writer.flush();
         writer.close();
+        indicesWriter.flush();
+        indicesWriter.close();
 
         if (outFile == null)
             println(writer.toString());
         else
             println("rendered to = " + outFile);
+
+        if (indicesOutFile == null)
+            println(indicesWriter.toString());
+        else
+            println("Indices rendered to = " + indicesOutFile);
 
         return true;
     }
@@ -326,6 +341,7 @@ public class DDLScanCtrl
             String tableFile = null;
             String db = null;
             String outFile = null;
+            String indicesOutFile = null;
             String renameDefinitions = null;
 
             // Options to pass to template.
@@ -391,6 +407,11 @@ public class DDLScanCtrl
                 {
                     if (argvIterator.hasNext())
                         outFile = argvIterator.next();
+                }
+                else if ("-indexOut".equals(curArg))
+                {
+                    if (argvIterator.hasNext())
+                        indicesOutFile = argvIterator.next();
                 }
                 else if ("-rename".equals(curArg))
                 {
@@ -504,7 +525,7 @@ public class DDLScanCtrl
 
             // Construct DDLScanCtrl from JDBC URL credentials.
             DDLScanCtrl ddlScanManager = new DDLScanCtrl(url, user, pass, db,
-                    tables, tableFile, templateFile, outFile,
+                    tables, tableFile, templateFile, outFile, indicesOutFile,
                     renameDefinitions, templateOptions, additionalPath);
 
             if (tables == null && tableFile == null && outFile != null)
@@ -592,6 +613,7 @@ public class DDLScanCtrl
         println(" [-opt opt val]    - Option(s) to pass to template, try: -opt help me. Use analytics_cfg for specifying One analytics cfg file.");
         println("                     Use 'analytics_cfg' opt for specifying One analytics config file. Refer ../samples/analytics/an_ddl_config.xml");
         println(" [-out file]       - Render to file (print to stdout if not specified)");
+        println(" [-indexOut file]  - Render indices DMLs to file (print to stdout if not specified)");
         println("  -help            - Print this help display");
     }
 

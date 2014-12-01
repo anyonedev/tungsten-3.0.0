@@ -121,7 +121,7 @@ public class Connector implements ReplicatorPlugin
             // Timeout at 10 times the heartbeat interval. This is longer than
             // the connect timeout by design so we don't time out if the server
             // is busy.
-            clientSocket.setReadTimeout(heartbeatMillis * 10);
+            clientSocket.setReadTimeout(heartbeatMillis * 100);
             clientSocket.connect();
         }
         catch (IllegalArgumentException e)

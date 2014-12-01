@@ -65,6 +65,7 @@ import com.continuent.tungsten.replicator.dbms.LoadDataFileFragment;
 import com.continuent.tungsten.replicator.dbms.LoadDataFileQuery;
 import com.continuent.tungsten.replicator.dbms.OneRowChange;
 import com.continuent.tungsten.replicator.dbms.OneRowChange.ColumnSpec;
+import com.continuent.tungsten.replicator.dbms.OneRowChange.ColumnVal;
 import com.continuent.tungsten.replicator.dbms.RowChangeData;
 import com.continuent.tungsten.replicator.dbms.RowIdData;
 import com.continuent.tungsten.replicator.dbms.StatementData;
@@ -866,6 +867,34 @@ public class JdbcApplier implements RawApplier
         return stmt;
     }
 
+    private void removeNullLobs(RowChangeData.ActionType action,
+            ArrayList<OneRowChange.ColumnSpec> columns,
+            ArrayList<OneRowChange.ColumnVal> colValues,
+            ArrayList<OneRowChange.ColumnSpec> columsWithOutNullLobs,
+            ArrayList<OneRowChange.ColumnVal> colValsWithOutNullLobs)
+    {
+        columsWithOutNullLobs.clear();
+        colValsWithOutNullLobs.clear();
+        if (RowChangeData.ActionType.UPDATE == action){
+            for (int i = 0; i < columns.size(); i++)
+            {
+                ColumnSpec columnSpec = columns.get(i);
+                ColumnVal columnVal = colValues.get(i);
+                if ((columnSpec.getType() == Types.BLOB || columnSpec.getType() == Types.CLOB)
+                        && columnVal.getValue() == null)
+                {
+                    continue;
+                }
+                columsWithOutNullLobs.add(columnSpec);
+                colValsWithOutNullLobs.add(columnVal);
+            }
+            if (columns.size() == columsWithOutNullLobs.size()){
+                columsWithOutNullLobs.clear();
+                colValsWithOutNullLobs.clear();
+            }
+        }
+    }
+    
     /**
      * Compares current key values to the previous key values and determines
      * whether null values changed. Eg. {1, 3, null} vs. {5, 2, null} returns
@@ -923,15 +952,16 @@ public class JdbcApplier implements RawApplier
     protected boolean needNewSQLStatement(int row,
             ArrayList<ArrayList<OneRowChange.ColumnVal>> keyValues,
             ArrayList<OneRowChange.ColumnSpec> keySpecs,
-            ArrayList<ArrayList<OneRowChange.ColumnVal>> colValues,
+            ArrayList<OneRowChange.ColumnVal> colValuesOfCurrRow,
+            ArrayList<OneRowChange.ColumnVal> colValuesOfPrevRow,
             ArrayList<OneRowChange.ColumnSpec> colSpecs)
     {
         if (keyValues.size() > row
                 && didNullKeysChange(keyValues.get(row), keyValues.get(row - 1)))
             return true;
-        if (colValues.size() > row
-                && didNullColsChange(colSpecs, colValues.get(row),
-                        colValues.get(row - 1)))
+        if (colValuesOfPrevRow != null
+                && didNullColsChange(colSpecs, colValuesOfCurrRow,
+                        colValuesOfPrevRow))
             return true;
         return false;
     }
@@ -948,6 +978,8 @@ public class JdbcApplier implements RawApplier
         ArrayList<OneRowChange.ColumnSpec> key = oneRowChange.getKeySpec();
         ArrayList<OneRowChange.ColumnSpec> columns = oneRowChange
                 .getColumnSpec();
+        
+        long  start = System.currentTimeMillis();
 
         try
         {
@@ -958,11 +990,28 @@ public class JdbcApplier implements RawApplier
             int updateCount = 0;
 
             int row = 0;
+            ArrayList<OneRowChange.ColumnSpec> columsWithOutNullLobs = new ArrayList<OneRowChange.ColumnSpec>();
+            ArrayList<OneRowChange.ColumnVal> colValsWithOutNullLobs = new ArrayList<OneRowChange.ColumnVal>();
+            ArrayList<OneRowChange.ColumnVal> colValuesOfThisRow = null, colValuesOfPrevRow = null;
             for (row = 0; row < columnValues.size() || row < keyValues.size(); row++)
             {
+                colValuesOfPrevRow = colValuesOfThisRow;
+                colValuesOfThisRow = null;
+                if (columnValues.size() > 0){
+                    colValuesOfThisRow = columnValues.get(row);
+                    columns = oneRowChange.getColumnSpec();
+                    removeNullLobs(oneRowChange.getAction(), columns,
+                                     colValuesOfThisRow, columsWithOutNullLobs, colValsWithOutNullLobs);
+                    if (!columsWithOutNullLobs.isEmpty())
+                    {
+                        columns = columsWithOutNullLobs;
+                        colValuesOfThisRow = colValsWithOutNullLobs;
+                    }
+                 }
+                
                 if (row == 0
                         || needNewSQLStatement(row, keyValues, key,
-                                columnValues, columns))
+                                colValuesOfThisRow, colValuesOfPrevRow, columns))
                 {
                     ArrayList<OneRowChange.ColumnVal> keyValuesOfThisRow = null;
                     if (keyValues.size() > 0)
@@ -971,10 +1020,6 @@ public class JdbcApplier implements RawApplier
                     // Construct separate SQL for every row, because there might
                     // be NULLs in keys in which case SQL is different
                     // (TREP-276).
-                    ArrayList<OneRowChange.ColumnVal> colValuesOfThisRow = null;
-                    if (columnValues.size() > 0)
-                        colValuesOfThisRow = columnValues.get(row);
-
                     stmt = constructStatement(oneRowChange.getAction(),
                             oneRowChange.getSchemaName(),
                             oneRowChange.getTableName(), columns, key,
@@ -990,7 +1035,7 @@ public class JdbcApplier implements RawApplier
                 if (columnValues.size() > 0)
                 {
                     bindLoc = bindColumnValues(prepStatement,
-                            columnValues.get(row), bindLoc, columns, false);
+                            colValuesOfThisRow, bindLoc, columns, false);
                 }
                 /* bind key values */
                 if (keyValues.size() > 0)
@@ -1034,6 +1079,8 @@ public class JdbcApplier implements RawApplier
                 logger.debug("Applied event (update count " + updateCount
                         + "): " + stmt.toString());
             }
+            
+            logger.info("Wrote " + updateCount + " rows to " + oneRowChange.getTableName() + " in " + (System.currentTimeMillis() - start) + "ms");
         }
         catch (SQLException e)
         {

@@ -187,7 +187,7 @@ public class DDLScan
      * @return Rendered template data.
      */
     public String scan(String tablesToFind,
-            Hashtable<String, Object> templateOptions, Writer writer)
+            Hashtable<String, Object> templateOptions, Writer writer, Writer indicesWriter)
             throws ReplicatorException, InterruptedException, SQLException,
             IOException
     {
@@ -264,16 +264,18 @@ public class DDLScan
             rename(table);
 
             // Velocity merge.
-            merge(context, table, writer);
+            merge(context, table, writer, indicesWriter);
 
             tablesRendered++;
         }
 
+        merge(context, writer, indicesWriter);
+        
         // No tables have been found and/or matched.
         if (tablesRendered == 0)
         {
             // Render the template once without table data. Eg. to output help.
-            merge(context, null, writer);
+            merge(context, null, writer, indicesWriter);
         }
 
         return writer.toString();
@@ -321,7 +323,7 @@ public class DDLScan
      * @param templateFile Path to Velocity template.
      * @param writer Initialized Writer object to append output to.
      */
-    private void merge(VelocityContext context, Table table, Writer writer)
+    private void merge(VelocityContext context, Table table, Writer writer, Writer indicesWriter)
             throws ReplicatorException
     {
         try
@@ -332,8 +334,32 @@ public class DDLScan
             // Now have the template engine process the template using the data
             // placed into the context. Think of it as a 'merge' of the template
             // and the data to produce the output stream.
-            if (template != null)
+            if (template != null){
+                context.remove("isIndex");
                 template.merge(context, writer);
+                context.put("isIndex", true);
+                template.merge(context, indicesWriter);
+            }
+                
+        }
+        catch (MethodInvocationException mie)
+        {
+            throw new ReplicatorException(
+                    "Something invoked in the template caused problem", mie);
+        }
+        catch (Exception e)
+        {
+            throw new ReplicatorException(e);
+        }
+    }
+
+    private void merge(VelocityContext context, Writer writer, Writer indicesWriter) throws ReplicatorException{
+       try
+        {
+            if (template != null){
+                context.put("isAdditionalIndices", true);
+                template.merge(context, indicesWriter);
+            }
         }
         catch (MethodInvocationException mie)
         {

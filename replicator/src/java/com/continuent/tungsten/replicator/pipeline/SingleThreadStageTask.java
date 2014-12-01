@@ -35,6 +35,7 @@ import com.continuent.tungsten.replicator.applier.Applier;
 import com.continuent.tungsten.replicator.applier.ApplierException;
 import com.continuent.tungsten.replicator.conf.FailurePolicy;
 import com.continuent.tungsten.replicator.consistency.ConsistencyException;
+import com.continuent.tungsten.replicator.event.DBMSEmptyEvent;
 import com.continuent.tungsten.replicator.event.ReplControlEvent;
 import com.continuent.tungsten.replicator.event.ReplDBMSEvent;
 import com.continuent.tungsten.replicator.event.ReplDBMSFilteredEvent;
@@ -793,6 +794,17 @@ public class SingleThreadStageTask implements Runnable
     {
         try
         {
+            // Ensure we are not trying to apply a previously applied event. This
+            // case can arise during restart.
+            ReplDBMSHeader lastProcessedEvent = applier.getLastEvent();
+            if (lastProcessedEvent != null && lastProcessedEvent.getLastFrag()
+                    && lastProcessedEvent.getSeqno() >= event.getSeqno()
+                    && !(event.getDBMSEvent() instanceof DBMSEmptyEvent))
+            {
+                logger.info("Skipping over previously applied event: seqno="
+                        + event.getSeqno() + " fragno=" + event.getFragno());
+                return;
+            }
             taskProgress.beginApplyInterval();
             applier.apply(event, doCommit, doRollback, syncTHL);
             if (doCommit)
@@ -812,7 +824,7 @@ public class SingleThreadStageTask implements Runnable
             {
                 String message = "Event application failed: seqno="
                         + event.getSeqno() + " fragno=" + event.getFragno()
-                        + " message=" + e.getMessage();
+                        + "class=" + event.getClass() + " message=" + e.getMessage();
                 logError(message, e);
             }
         }

@@ -283,6 +283,7 @@ public class LogFile
             write(MAJOR_VERSION);
             write(MINOR_VERSION);
             write(seqno);
+            needsFlush = true;
             flush();
         }
         catch (IOException e)
