@@ -188,7 +188,7 @@ public class OptimizeUpdatesFilter implements Filter
         // Holds the list of columns that didn't change their values.
         ArrayList<ColumnSpec> columnsToRemove = new ArrayList<ColumnSpec>();
 
-        if (columns.size() != keys.size())
+        if (columns.size() != keys.size() && keys.size() != 1)
             throw new ReplicatorException(
                     "OptimizeUpdatesFilter cannot filter, because column and key count is different. "
                             + "Make sure that it is defined before filters which remove keys (eg. PrimaryKeyFilter).");

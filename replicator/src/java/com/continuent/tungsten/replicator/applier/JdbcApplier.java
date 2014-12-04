@@ -992,10 +992,12 @@ public class JdbcApplier implements RawApplier
             int row = 0;
             ArrayList<OneRowChange.ColumnSpec> columsWithOutNullLobs = new ArrayList<OneRowChange.ColumnSpec>();
             ArrayList<OneRowChange.ColumnVal> colValsWithOutNullLobs = new ArrayList<OneRowChange.ColumnVal>();
-            ArrayList<OneRowChange.ColumnVal> colValuesOfThisRow = null, colValuesOfPrevRow = null;
+            ArrayList<OneRowChange.ColumnVal> colValuesOfThisRow = new ArrayList<OneRowChange.ColumnVal>();
+            ArrayList<OneRowChange.ColumnVal> colValuesOfPrevRow = new ArrayList<OneRowChange.ColumnVal>();
             for (row = 0; row < columnValues.size() || row < keyValues.size(); row++)
             {
-                colValuesOfPrevRow = colValuesOfThisRow;
+                colValuesOfPrevRow.clear();
+                colValuesOfPrevRow.addAll(colValuesOfThisRow);
                 colValuesOfThisRow = null;
                 if (columnValues.size() > 0){
                     colValuesOfThisRow = columnValues.get(row);
