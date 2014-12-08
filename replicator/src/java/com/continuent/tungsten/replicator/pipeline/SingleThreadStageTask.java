@@ -410,6 +410,16 @@ public class SingleThreadStageTask implements Runnable
                         lastFilteredEvent = currentEvent;
                         filteredEventCount++;
                     }
+                    boolean doCommit = false;
+                    if (extractorQueueEmpty())
+                    {
+                        // Commit if there is no more work to be done.
+                        doCommit = true;
+                    }
+                    if (doCommit)
+                    {
+                        commit();
+                    }
                     continue;
                 }
                 else
