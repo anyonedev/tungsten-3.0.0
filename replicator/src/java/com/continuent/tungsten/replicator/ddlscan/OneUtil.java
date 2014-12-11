@@ -2,6 +2,7 @@
 package com.continuent.tungsten.replicator.ddlscan;
 
 import java.io.File;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Hashtable;
@@ -65,7 +66,7 @@ public class OneUtil
                         for (int i=0; i<childs.getLength(); i++) {
                             Node child = childs.item(i);
                             if ("Table".equals(child.getNodeName())){
-                                ignoredTablesList.add(child.getAttributes().getNamedItem("name").getNodeValue());
+                                ignoredTablesList.add(child.getAttributes().getNamedItem("name").getNodeValue().toUpperCase());
                             }
                         }
                     }
@@ -178,6 +179,37 @@ public class OneUtil
         return additionalIndices;
     }
     
+    public List<Key> getIndices(Table table){
+       List<Key> keys = new ArrayList<Key>(table.getUniqueIndexes());
+       for (Column col : table.getAllColumns()){
+           Key key = null;
+           if ("CREATION_DATE".equalsIgnoreCase(col.getName())){
+               key = new Key(Key.NonUnique);
+               key.setName(table.getName().toUpperCase()+"_"+"CDATE");
+               key.AddColumn(new Column("CREATION_DATE", Types.TIMESTAMP));
+           }
+           if ("LEVEL_CREATION_DATE".equalsIgnoreCase(col.getName())){
+               key = new Key(Key.NonUnique);
+               key.setName(table.getName().toUpperCase()+"_"+"LCDATE");
+               key.AddColumn(new Column("LEVEL_CREATION_DATE", Types.TIMESTAMP));
+           }
+           if ("LAST_MODIFIED_USER".equalsIgnoreCase(col.getName())){
+               key = new Key(Key.NonUnique);
+               key.setName(table.getName().toUpperCase()+"_"+"LMDATE");
+               key.AddColumn(new Column("LAST_MODIFIED_USER", Types.TIMESTAMP));
+           }
+           if ("LEVEL_MODIFIED_DATE".equalsIgnoreCase(col.getName())){
+               key = new Key(Key.NonUnique);
+               key.setName(table.getName().toUpperCase()+"_"+"LLMDDATE");
+               key.AddColumn(new Column("LEVEL_MODIFIED_DATE", Types.TIMESTAMP));
+           }
+           if (key != null){
+               keys.add(key);
+           }
+       }
+       return keys;
+    }
+
     public static class Index{
         private String name, table, cols, type="UNIQUE";
 

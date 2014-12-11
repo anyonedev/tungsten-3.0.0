@@ -27,9 +27,9 @@
 #if( $help )
 #stop
 #end
-
+#if (!$OneUtil.isIgnored($table.getName().toUpperCase())) 
 #if (!$isIndex)
-#if (!$OneUtil.isIgnored($table.getName().toUpperCase()))  
+
 #parse("includes/one-ddl-oracle-mysql-table.vm")
 #set ( $tryPkInclude = "${table.getSchema()}.${table.getName()}.pk" )
 #set ( $tryInclude = "${table.getSchema()}.${table.getName()}.ddl" )
@@ -72,13 +72,16 @@ $uCol.getName()##
 #end
 
 ) ENGINE=$engine;
-#end
 #else
-#foreach ( $ukey in $table.getUniqueIndexes() )
-#if (!$OneUtil.isPrimaryKey($table, $ukey) && !$OneUtil.isSuppressed($table, $ukey))
+#foreach ( $ukey in $OneUtil.getIndices($table) )
+#if (!$OneUtil.isPrimaryKey($table,$ukey) && !$OneUtil.isSuppressed($table, $ukey))
 
 DROP INDEX $ukey.getName() ON $table.getName().toUpperCase();
-CREATE UNIQUE INDEX $ukey.getName() ON $table.getName().toUpperCase() 
+CREATE ##
+#if ($ukey.getType() == 3)
+UNIQUE ##
+#end
+INDEX $ukey.getName() ON $table.getName().toUpperCase() 
 (##
 #set ( $lastIndex = $ukey.getColumns().size() - 1)
 #foreach ( $index in [0..$lastIndex] )
@@ -87,7 +90,8 @@ $col.getName()##
 #if ($index+1 != $ukey.getColumns().size()) ,
 #end
 #end
-) USING BTREE;##
+) USING BTREE;
+#end
 #end
 #end
 #end

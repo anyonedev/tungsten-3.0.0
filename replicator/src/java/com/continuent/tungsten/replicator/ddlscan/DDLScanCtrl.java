@@ -523,6 +523,8 @@ public class DDLScanCtrl
                             "Unable to read configuration file " + configFile);
             }
 
+            OneUtil.populateAnalyticsOptions(templateOptions);
+
             // Construct DDLScanCtrl from JDBC URL credentials.
             DDLScanCtrl ddlScanManager = new DDLScanCtrl(url, user, pass, db,
                     tables, tableFile, templateFile, outFile, indicesOutFile,
