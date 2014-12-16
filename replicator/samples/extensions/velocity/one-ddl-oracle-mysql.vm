@@ -73,15 +73,17 @@ $uCol.getName()##
 
 ) ENGINE=$engine;
 #else
+#if ( $counter == 2 )
+/* IMPORTANT: THIS SCRIPT SHOULD BE EXECUTED AFTER PROVISIONING IS COMPLETED ON MARAIDB.*/
+#end
 #foreach ( $ukey in $OneUtil.getIndices($table) )
 #if (!$OneUtil.isPrimaryKey($table,$ukey) && !$OneUtil.isSuppressed($table, $ukey))
 
-DROP INDEX $ukey.getName() ON $table.getName().toUpperCase();
 CREATE ##
 #if ($ukey.getType() == 3)
 UNIQUE ##
 #end
-INDEX $ukey.getName() ON $table.getName().toUpperCase() 
+INDEX $ukey.getName() ON ${table.getSchema().toUpperCase()}.${table.getName().toUpperCase()}
 (##
 #set ( $lastIndex = $ukey.getColumns().size() - 1)
 #foreach ( $index in [0..$lastIndex] )
@@ -97,12 +99,10 @@ $col.getName()##
 #end
 #if ($isAdditionalIndices && $OneUtil.getAdditionalIndices() && $OneUtil.getAdditionalIndices().size() != 0)
 
-
 /* Additional Indices */
 #foreach ( $uIndex in $OneUtil.getAdditionalIndices() )
 
-DROP INDEX $uIndex.getName() ON $uIndex.getTable();
-CREATE $uIndex.getType() INDEX $uIndex.getName() ON $uIndex.getTable()
+CREATE $uIndex.getType() INDEX $uIndex.getName() ON ${dbName.toUpperCase()}.${uIndex.getTable()}
 ($uIndex.getCols()) USING BTREE;
 #end
 #end

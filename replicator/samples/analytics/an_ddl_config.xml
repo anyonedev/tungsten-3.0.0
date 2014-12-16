@@ -48,10 +48,12 @@
          cols: comma separated column names which need to be indexed. Order is important.
          type: UNIQUE|FULLTEXT|SPATIAL (Default value is UNIQUE)
       -->
-   <!-- 
    <AdditionalIndices>
-     <Index name="TEST_UNQ" table="ACK_AWAIT_CONFIG" cols="sys_ack_await_config_id, vc_id"/>
-	 <Index name="TEST_UNQ1" table="ACK_AWAIT_CONFIG" cols="model_name" type="FULLTEXT"/>
+     <!-- DO NOT EDIT/REMOVE FOLLOWING CRITICAL SECTION. -->
+     <!-- START OF CRITICAL SECTION -->
+     <Index name="ORGANIZATION_ENT_ID" table="ORGANIZATION" cols="sys_ent_id" type=""/>
+	 <Index name="PARTNER_ORG_ID" table="PARTNER" cols="PARTNER_ORG_ID" type=""/>
+	 <Index name="PARTNER_SYS_ORG_ID" table="PARTNER" cols="SYS_ORG_ID" type=""/>
+	 <!-- END OF CRITICAL SECTION -->
    </AdditionalIndices>
-   -->
 </AnalyticsConfig>
