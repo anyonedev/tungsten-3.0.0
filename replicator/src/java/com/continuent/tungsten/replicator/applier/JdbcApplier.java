@@ -933,6 +933,8 @@ public class JdbcApplier implements RawApplier
     {
         if (!conn.nullsEverBoundDifferently())
             return false;
+        if (currentColValues.size() != previousColValues.size())
+            return true;
         for (int i = 0; i < currentColValues.size(); i++)
         {
             if (conn.nullsBoundDifferently(colSpecs.get(i)))
@@ -959,9 +961,7 @@ public class JdbcApplier implements RawApplier
         if (keyValues.size() > row
                 && didNullKeysChange(keyValues.get(row), keyValues.get(row - 1)))
             return true;
-        if (colValuesOfPrevRow != null
-                && didNullColsChange(colSpecs, colValuesOfCurrRow,
-                        colValuesOfPrevRow))
+        if (didNullColsChange(colSpecs, colValuesOfCurrRow, colValuesOfPrevRow))
             return true;
         return false;
     }
