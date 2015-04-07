@@ -2,8 +2,8 @@
 package com.continuent.tungsten.replicator.ddlscan;
 
 import java.io.File;
-import java.sql.Types;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Hashtable;
 import java.util.List;
@@ -26,7 +26,7 @@ public class OneUtil
 
     private Map<String, String> columnDataTypeOverrides;
     private List<String> ignoredTables;
-    private List<Index> suppressedIndices, additionalIndices;
+    private List<Index> suppressedIndices, additionalIndices, commonIndices;
 
     static void populateAnalyticsOptions(
             Hashtable<String, Object> templateOptions)
@@ -87,20 +87,37 @@ public class OneUtil
                     
                     nodeList = document.getElementsByTagName("AdditionalIndices");
                     List<Index> additionalIndices = new ArrayList<Index>();
+                    List<Index> commonIndices = new ArrayList<Index>();
                     if (nodeList.getLength() != 0){
                         NodeList childs = nodeList.item(0).getChildNodes();
                         for (int i=0; i<childs.getLength(); i++) {
                             Node child = childs.item(i);
                             if ("Index".equals(child.getNodeName())){
-                                String name = child.getAttributes().getNamedItem("name").getNodeValue();
-                                String table = child.getAttributes().getNamedItem("table").getNodeValue();
+                                Node nameAttr = child.getAttributes().getNamedItem("name");
+                                Node nameSuffixAttr = child.getAttributes().getNamedItem("nameSuffix");
                                 String cols = child.getAttributes().getNamedItem("cols").getNodeValue();
-                                Index index = new Index(name, table);
-                                index.setCols(cols);
-                                if (child.getAttributes().getNamedItem("type") != null){
-                                    index.setType(child.getAttributes().getNamedItem("type").getNodeValue());
+                                if (nameAttr != null){
+                                    String name = nameAttr.getNodeValue();
+                                    String table = child.getAttributes().getNamedItem("table").getNodeValue();
+                                    Index index = new Index(name, table);
+                                    index.setCols(cols);
+                                    if (child.getAttributes().getNamedItem("type") != null){
+                                        index.setType(child.getAttributes().getNamedItem("type").getNodeValue());
+                                    }
+                                    additionalIndices.add(index);
                                 }
-                                additionalIndices.add(index);
+                                else if (nameSuffixAttr != null){
+                                    String name = nameSuffixAttr.getNodeValue();
+                                    String[] colTypes = child.getAttributes().getNamedItem("colTypes").getNodeValue().toUpperCase().split(",");
+                                    String[] colNames = cols.toUpperCase().split(",");
+                                    
+                                    Index index = new Index(name, colNames, colTypes);
+                                    if (child.getAttributes().getNamedItem("type") != null){
+                                        index.setType(child.getAttributes().getNamedItem("type").getNodeValue());
+                                    }
+                                    commonIndices.add(index);
+                                }
+                                
                             }
                         }
                     }
@@ -109,6 +126,7 @@ public class OneUtil
                     oneUtil.ignoredTables = ignoredTablesList;
                     oneUtil.suppressedIndices = suppressedIndices;
                     oneUtil.additionalIndices = additionalIndices;
+                    oneUtil.commonIndices = commonIndices;
                 }
                 catch (Exception e)
                 {
@@ -181,29 +199,20 @@ public class OneUtil
     
     public List<Key> getIndices(Table table){
        List<Key> keys = new ArrayList<Key>(table.getUniqueIndexes());
+       List<String> allColNames = new ArrayList<String>();
        for (Column col : table.getAllColumns()){
-           Key key = null;
-           if ("CREATION_DATE".equalsIgnoreCase(col.getName())){
-               key = new Key(Key.NonUnique);
-               key.setName(table.getName().toUpperCase()+"_"+"CDATE");
-               key.AddColumn(new Column("CREATION_DATE", Types.TIMESTAMP));
-           }
-           if ("LEVEL_CREATION_DATE".equalsIgnoreCase(col.getName())){
-               key = new Key(Key.NonUnique);
-               key.setName(table.getName().toUpperCase()+"_"+"LCDATE");
-               key.AddColumn(new Column("LEVEL_CREATION_DATE", Types.TIMESTAMP));
-           }
-           if ("LAST_MODIFIED_USER".equalsIgnoreCase(col.getName())){
-               key = new Key(Key.NonUnique);
-               key.setName(table.getName().toUpperCase()+"_"+"LMDATE");
-               key.AddColumn(new Column("LAST_MODIFIED_USER", Types.TIMESTAMP));
-           }
-           if ("LEVEL_MODIFIED_DATE".equalsIgnoreCase(col.getName())){
-               key = new Key(Key.NonUnique);
-               key.setName(table.getName().toUpperCase()+"_"+"LLMDDATE");
-               key.AddColumn(new Column("LEVEL_MODIFIED_DATE", Types.TIMESTAMP));
-           }
-           if (key != null){
+           allColNames.add(col.getName().toUpperCase());
+       }
+       for (Index index : commonIndices){
+           List<String> indexColNames = new ArrayList<String>(Arrays.asList(index.getColNames()));
+           indexColNames.retainAll(allColNames);
+           if (index.getColNames().length == indexColNames.size()){
+               Key key = new Key(index.getType().equals("NONUNIQUE") ? Key.NonUnique : Key.Unique);
+               key.setName(table.getName().toUpperCase()+"_"+index.getName());
+               String[] colTypes = index.getColTypes();
+               for (int i=0; i<indexColNames.size(); i++){
+                   key.AddColumn(new Column(indexColNames.get(i), JDBCType.valueOf(colTypes[i]).getType()));
+               }
                keys.add(key);
            }
        }
@@ -212,7 +221,7 @@ public class OneUtil
 
     public static class Index{
         private String name, table, cols, type="UNIQUE";
-
+        private String[] colNames, colTypes;
         
         public Index(String name, String table)
         {
@@ -221,6 +230,24 @@ public class OneUtil
             this.table = table.toUpperCase();
         }
 
+        Index(String name, String[] colNames, String[] colTypes){
+            super();
+            this.name = name.toUpperCase();
+            this.colNames = colNames;
+            this.colTypes = colTypes;
+            if (colNames.length != colTypes.length){
+                throw new RuntimeException("Please check length of cols and colTypes");
+            }
+        }
+        
+        String[] getColTypes(){
+            return colTypes;
+        }
+        
+        String[] getColNames(){
+            return colNames;
+        }
+        
         public String getName()
         {
             return name;
